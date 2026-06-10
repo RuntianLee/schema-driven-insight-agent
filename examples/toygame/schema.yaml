@@ -1,0 +1,39 @@
+version: 1
+domain: idle_game_demo
+
+tuning:
+  groups_top_n: 5
+
+data_sources:
+  layer2:
+    type: sqlite
+    path: ./data/toygame.db
+
+state_tables:
+  player_basics:
+    nature: snapshot
+    primary_key: [player_id]
+    fields:
+      player_id:  {type: int64, role: actor_id, pk: true, pii: true}
+      level:      {type: int32, role: level}
+      coins:      {type: int64, role: balance, currency_type: coins}
+      last_login: {type: unix_timestamp_seconds, role: last_seen}
+
+derived_tables:
+  player_currencies:
+    derived_from: player_basics
+    method: pivot_money_columns
+    schema:
+      player_id:     {type: int64,  role: actor_id}
+      currency_type: {type: string, role: currency_kind, glossary_key: currency_types}
+      balance:       {type: int64,  role: balance}
+
+glossary:
+  currency_types:
+    coins: "游戏金币（示例）"
+  buckets:
+    coins_balance:
+      - {min: 0,     max: 100,   label: "0~100"}
+      - {min: 101,   max: 1000,  label: "101~1k"}
+      - {min: 1001,  max: 10000, label: "1k~1w"}
+      - {min: 10001, max: null,  label: "1w+"}

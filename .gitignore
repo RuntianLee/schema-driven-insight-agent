@@ -1,0 +1,17 @@
+# 运行时产物（合成数据 / 轨迹 / 健康文件，永不进 git）
+examples/*/data/
+trajectory.db
+trajectory.db-wal
+trajectory.db-shm
+etl_health*.json
+
+# 本地 LLM 配置（可能含 api_key）——*.example.yaml 模板才进库
+config/llm.yaml
+
+# OS / build
+.DS_Store
+*.test
+# built CLI binaries (only appear if you `go build` a cmd without -o; `go run` leaves none).
+# Anchored + suffixed to avoid matching the agent/ and examples/*/seed/ PACKAGE dirs.
+/agent.bin
+/seed.bin

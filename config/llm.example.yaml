@@ -1,0 +1,21 @@
+# LLM provider configuration template.
+# Copy this file to config/llm.yaml and edit for your environment.
+# config/llm.yaml is gitignored — this example file is safe to commit.
+#
+# Convention: the YAML names the env var that holds the secret;
+# the actual key stays in the environment, never in committed files.
+
+provider: minimax
+endpoint: https://api.minimax.io/v1/text/chatcompletion_v2
+model: MiniMax-M2.7
+
+# api_key_env names the environment variable that holds your API key.
+# This is the recommended approach — the file stays safe to commit.
+api_key_env: MINIMAX_API_KEY
+
+# api_key: "sk-..."
+# Uncomment the line above to supply the key inline.
+# WARNING: if you use api_key, you MUST gitignore config/llm.yaml (it is already
+# gitignored by default). Never commit a file that contains a raw secret.
+
+timeout_seconds: 60

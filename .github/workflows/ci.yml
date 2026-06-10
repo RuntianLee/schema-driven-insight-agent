@@ -1,0 +1,35 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: |
+            go.sum
+            examples/toygame/go.sum
+
+      # framework (root module) — self-contained
+      - name: build/vet/test framework
+        run: |
+          go build ./...
+          go vet ./...
+          go test -race ./...
+
+      # toygame example — separate module, resolves framework via a replace directive
+      - name: build/vet/test toygame example
+        working-directory: examples/toygame
+        run: |
+          go build ./...
+          go vet ./...
+          go test -race ./...
+
+      - name: toygame smoke (seed)
+        working-directory: examples/toygame
+        run: |
+          go run ./cmd/seed
+          echo "toygame seeded OK"

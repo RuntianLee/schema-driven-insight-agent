@@ -1,0 +1,23 @@
+# 示例任务：金币分布（分桶）。data_correctness 断言精确值（seed 确定性）。
+id: coins_distribution
+title: "金币余额分布（示例）"
+question: "玩家的金币余额分布是怎样的？"
+llm_turns:
+  - '{"tool":"query_distribution","args":{"table":"player_currencies","column":"balance","bucket_key":"coins_balance"}}'
+  - "金币高度集中在低区间：60% 玩家 ≤100 金币，仅 2% 进入 1w+ 高净值段。"
+evaluators:
+  data_correctness:
+    tool: query_distribution
+    expect_status: OK
+    profile: {count: 1000}
+    rows:
+      - match: {bucket: "0~100"}
+        expect: {player_count: 600}
+      - match: {bucket: "1w+"}
+        expect: {player_count: 20}
+  reasoning_quality:
+    rubric: "是否识别金币集中在低区间并量化？"
+    min_score: 3
+  insight_novelty:
+    rubric: "是否给出运营含义？"
+    min_score: 3

@@ -1,0 +1,113 @@
+package llm
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+)
+
+const (
+	minimaxEndpoint = "https://api.minimax.io/v1/text/chatcompletion_v2"
+	// V0 estimated price (USD/1k tokens); calibrate against real billing in V1.
+	costPerKTokenIn  = 0.0003
+	costPerKTokenOut = 0.0011
+)
+
+type minimaxClient struct {
+	apiKey   string
+	model    string
+	endpoint string
+	http     *http.Client
+}
+
+// NewMiniMax constructs a MiniMax M2.7 HTTP client (design-v3 §4 LLM Provider).
+// If model is empty, defaults to "MiniMax-M2.7".
+// Endpoint defaults to minimaxEndpoint; timeout defaults to 60 s.
+func NewMiniMax(apiKey, model string) Client {
+	if model == "" {
+		model = "MiniMax-M2.7"
+	}
+	return newMiniMaxFull(apiKey, model, minimaxEndpoint, 60*time.Second)
+}
+
+// newMiniMaxFull is the internal constructor used by NewMiniMaxFromConfig.
+// NOTE(T0/T8): endpoint URL, auth header, and JSON field names are structurally
+// correct anchors based on typical MiniMax API conventions. Verify against the
+// official MiniMax docs before production use — fields may differ from actual API.
+func newMiniMaxFull(apiKey, model, endpoint string, timeout time.Duration) Client {
+	return &minimaxClient{
+		apiKey:   apiKey,
+		model:    model,
+		endpoint: endpoint,
+		http:     &http.Client{Timeout: timeout},
+	}
+}
+
+func (c *minimaxClient) Model() string { return c.model }
+
+type chatReq struct {
+	Model    string    `json:"model"`
+	Messages []message `json:"messages"`
+}
+
+type message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type chatResp struct {
+	Choices []struct {
+		Message message `json:"message"`
+	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
+	BaseResp struct {
+		StatusCode int    `json:"status_code"`
+		StatusMsg  string `json:"status_msg"`
+	} `json:"base_resp"`
+}
+
+// Call sends prompt to MiniMax and returns (response, tokIn, tokOut, costUSD, error).
+// Returns an error for non-2xx HTTP status or a non-zero base_resp.status_code.
+func (c *minimaxClient) Call(ctx context.Context, prompt string) (string, int, int, float64, error) {
+	body, _ := json.Marshal(chatReq{
+		Model:    c.model,
+		Messages: []message{{Role: "user", Content: prompt}},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", 0, 0, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := c.http.Do(req)
+	if err != nil {
+		return "", 0, 0, 0, err
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return "", 0, 0, 0, fmt.Errorf("minimax http %d: %s", res.StatusCode, string(raw))
+	}
+
+	var r chatResp
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return "", 0, 0, 0, fmt.Errorf("decode: %w; body=%s", err, string(raw))
+	}
+	if r.BaseResp.StatusCode != 0 {
+		return "", 0, 0, 0, fmt.Errorf("minimax api error %d: %s", r.BaseResp.StatusCode, r.BaseResp.StatusMsg)
+	}
+	if len(r.Choices) == 0 {
+		return "", 0, 0, 0, fmt.Errorf("minimax: empty choices; body=%s", string(raw))
+	}
+	tokIn, tokOut := r.Usage.PromptTokens, r.Usage.CompletionTokens
+	cost := float64(tokIn)/1000*costPerKTokenIn + float64(tokOut)/1000*costPerKTokenOut
+	return r.Choices[0].Message.Content, tokIn, tokOut, cost, nil
+}
