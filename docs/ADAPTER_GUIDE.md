@@ -1,5 +1,7 @@
 # Adapter Guide — write your own data adapter
 
+**English** | [简体中文](ADAPTER_GUIDE.zh-CN.md)
+
 This framework is **schema-driven**: to support a new dataset you write one `schema.yaml` and a thin adapter that produces a local SQLite snapshot. The agent core stays untouched. This guide walks through it using the runnable [`examples/toygame`](../examples/toygame) adapter as the scaffold — typically **under 200 lines** total.
 
 An adapter is a **separate Go module** that depends on this framework and provides three things:

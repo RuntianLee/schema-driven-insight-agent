@@ -84,7 +84,7 @@ flowchart TB
 
 ## 写你自己的 adapter
 
-见 **[docs/ADAPTER_GUIDE.md](docs/ADAPTER_GUIDE.md)** —— 以 `examples/toygame` 为脚手架的一步步教程。
+见 **[docs/ADAPTER_GUIDE.zh-CN.md](docs/ADAPTER_GUIDE.zh-CN.md)** —— 以 `examples/toygame` 为脚手架的一步步教程。
 
 ## 仓库结构
 
