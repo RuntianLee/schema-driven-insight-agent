@@ -162,18 +162,24 @@ func buildWealthCase(col string, buckets []BucketDef) string {
 }
 
 // 前置条件：col 必须已通过 BuildDistribution 的字段白名单校验（安全 inline）。
+// label 经 quoteSQLString 转义后 inline（防单引号破坏 SQL / 注入）。
 func buildCase(col string, buckets []BucketDef) string {
 	var sb strings.Builder
 	sb.WriteString("CASE")
 	for i, b := range buckets {
 		if i == len(buckets)-1 {
-			fmt.Fprintf(&sb, " ELSE '%s'", b.Label)
+			fmt.Fprintf(&sb, " ELSE %s", quoteSQLString(b.Label))
 		} else {
-			fmt.Fprintf(&sb, " WHEN %s <= %d THEN '%s'", col, b.Max, b.Label)
+			fmt.Fprintf(&sb, " WHEN %s <= %d THEN %s", col, b.Max, quoteSQLString(b.Label))
 		}
 	}
 	sb.WriteString(" END")
 	return sb.String()
+}
+
+// quoteSQLString 将任意字符串安全 inline 为 SQL 字符串字面量（单引号翻倍转义）。
+func quoteSQLString(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 func sortedKeys(m map[string]any) []string {

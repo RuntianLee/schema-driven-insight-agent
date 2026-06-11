@@ -31,6 +31,12 @@ state_tables: {}
 	if _, err := ParseScope(badScope); err == nil {
 		t.Fatal("expected error for scope without filter_column")
 	}
+
+	// filter_column 会 inline 进 WHERE：非法标识符必须前置拒绝
+	injScope := []byte("scope:\n  filter_column: \"server_id; DROP TABLE x--\"\n  server_ids: [1]\n")
+	if _, err := ParseScope(injScope); err == nil {
+		t.Fatal("expected error for non-identifier filter_column")
+	}
 }
 
 func TestWhereClause(t *testing.T) {

@@ -2,10 +2,16 @@ package schema_protocol
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 
 	"gopkg.in/yaml.v3"
 )
+
+// reIdent：表名/列名必须是安全 SQL 标识符——它们会被 inline 进 SQL
+// （sql_builder / profile_builder），白名单只保证「名字在 schema 里」，
+// 这里保证「名字本身无害」（defense in depth）。
+var reIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // 中间结构：吸收 YAML 的两种 table 形态（state_tables 用 fields，derived 用 schema）。
 type rawSchema struct {
@@ -115,7 +121,37 @@ func Parse(yamlBytes []byte) (*Schema, error) {
 		}
 		s.Glossary.Buckets[key] = converted
 	}
+
+	if err := validateIdentifiers(s); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// validateIdentifiers 校验所有表名/列名为安全 SQL 标识符（见 reIdent 注释）。
+func validateIdentifiers(s *Schema) error {
+	checkTable := func(kind, name string, t Table) error {
+		if !reIdent.MatchString(name) {
+			return fmt.Errorf("%s %q: 非法表名（须匹配 %s）", kind, name, reIdent)
+		}
+		for col := range t.Fields {
+			if !reIdent.MatchString(col) {
+				return fmt.Errorf("%s %s: 非法列名 %q（须匹配 %s）", kind, name, col, reIdent)
+			}
+		}
+		return nil
+	}
+	for name, t := range s.StateTables {
+		if err := checkTable("state_tables", name, t); err != nil {
+			return err
+		}
+	}
+	for name, t := range s.DerivedTables {
+		if err := checkTable("derived_tables", name, t); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func convertBuckets(key string, raw []rawBucket) ([]BucketDef, error) {

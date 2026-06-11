@@ -70,11 +70,27 @@ func (d *DataCorrectness) Evaluate(_ context.Context, res TaskResult, spec *yaml
 	return Score{Evaluator: d.Name(), Value: 1.0, Pass: true, Display: "1.00 ✓"}, nil
 }
 
+// findToolResponse 选取 tool 的最终有效调用：agent 允许 SCHEMA_ERROR 后自修正重试
+// （prompt 约定），故优先取最后一次成功（Err==nil 且 Status==OK）的同名调用；
+// 无成功调用则回退最后一次 Err==nil 的调用（保留失败 Response 供 expect_status 断言）。
 func findToolResponse(res TaskResult, tool string) (contract.Response, bool) {
-	for _, tc := range res.ToolCalls {
-		if tc.Name == tool {
-			return tc.Response, tc.Err == nil
+	var lastOK, lastNoErr *contract.Response
+	for i := range res.ToolCalls {
+		tc := res.ToolCalls[i]
+		if tc.Name != tool || tc.Err != nil {
+			continue
 		}
+		resp := tc.Response
+		lastNoErr = &resp
+		if resp.Status == contract.StatusOK {
+			lastOK = &resp
+		}
+	}
+	if lastOK != nil {
+		return *lastOK, true
+	}
+	if lastNoErr != nil {
+		return *lastNoErr, true
 	}
 	return contract.Response{}, false
 }

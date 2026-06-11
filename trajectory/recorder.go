@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,6 +47,7 @@ type recorder struct {
 
 	mu        sync.Mutex
 	stepIndex int
+	closed    bool // Finalize 后置位，enqueue 拒绝写入（防 send on closed channel）
 
 	ch        chan stepRecord
 	done      chan struct{}
@@ -59,12 +62,13 @@ type recorder struct {
 
 // New 开启新 trajectory：同步插入占位行 + 启动异步 step writer（trajectory-spec-v2 §6）。
 // taskClass：production（真实使用）/ benchmark（eval 基准跑）；空串落 NULL。
+// input_question 与 step 同等待遇：写入前脱敏（PII redacted on write）。
 func New(ctx context.Context, db *sql.DB, agentVersion, question, taskClass string) (Recorder, error) {
 	id := uuid.NewString()
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO trajectories (trajectory_id, created_at, agent_version, input_question, outcome, task_class)
 		 VALUES (?, ?, ?, ?, 'in_progress', ?)`,
-		id, time.Now().Unix(), agentVersion, question, nullable(taskClass))
+		id, time.Now().Unix(), agentVersion, redactString(question), nullable(taskClass))
 	if err != nil {
 		return nil, err
 	}
@@ -115,9 +119,13 @@ func (r *recorder) persistStep(s stepRecord) {
 
 func (r *recorder) enqueue(s stepRecord) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		atomic.AddInt64(&r.dropped, 1) // Finalize 后到达的 step 丢弃，不 panic
+		return
+	}
 	s.stepIndex = r.stepIndex
 	r.stepIndex++
-	r.mu.Unlock()
 	select {
 	case r.ch <- s:
 	default:
@@ -149,17 +157,24 @@ func (r *recorder) RecordReasoning(thought string, started, ended time.Time) {
 }
 
 // Finalize 关闭 channel、等 writer 排空、回填汇总（唯一允许的 UPDATE 路径）。可幂等调用。
+// final_output 与 step 同等待遇：写入前脱敏；channel 满丢弃的 step 数记入 error_summary（可观测）。
 func (r *recorder) Finalize(ctx context.Context, outcome, finalOutput, errSummary string) error {
 	r.closeOnce.Do(func() {
+		r.mu.Lock()
+		r.closed = true
+		r.mu.Unlock()
 		close(r.ch)
 		<-r.done
 	})
+	if n := atomic.LoadInt64(&r.dropped); n > 0 {
+		errSummary = strings.TrimSpace(errSummary + fmt.Sprintf(" [trajectory: %d steps dropped]", n))
+	}
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE trajectories
 		 SET final_output=?, outcome=?, total_tokens=?, total_cost_usd=?,
 		     total_latency_ms=?, step_count=?, error_summary=?
 		 WHERE trajectory_id=?`,
-		finalOutput, outcome, r.totalTokens, r.totalCost,
+		redactString(finalOutput), outcome, r.totalTokens, r.totalCost,
 		time.Since(r.startTime).Milliseconds(), r.stepCount, nullable(errSummary), r.trajID)
 	return err
 }

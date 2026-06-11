@@ -2,10 +2,15 @@ package etl
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// reScopeIdent：filter_column 会被 inline 进 WHERE（WhereClause），
+// 须为安全 SQL 标识符。本包自行校验（不经 schema_protocol，保持自包含）。
+var reScopeIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Scope 声明 adapter 的数据范围过滤（如按 server 维度圈定）。来自 schema.yaml 顶层可选 scope 块。
 // 注意：本包自行解析 scope（不经 framework/schema_protocol），以保冻结 core 0 改动。
@@ -31,6 +36,9 @@ func ParseScope(yamlBytes []byte) (*Scope, error) {
 	}
 	if w.Scope.FilterColumn == "" {
 		return nil, fmt.Errorf("scope.filter_column required when scope present")
+	}
+	if !reScopeIdent.MatchString(w.Scope.FilterColumn) {
+		return nil, fmt.Errorf("scope.filter_column %q: 非法标识符（须匹配 %s）", w.Scope.FilterColumn, reScopeIdent)
 	}
 	if len(w.Scope.ServerIDs) == 0 {
 		return nil, fmt.Errorf("scope.server_ids must be non-empty when scope present")
