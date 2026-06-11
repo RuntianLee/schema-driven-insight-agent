@@ -32,7 +32,7 @@ cd .. && cd ..
 go run ./cmd/agent -q "玩家的金币余额分布是怎样的？"
 ```
 
-Without `MINIMAX_API_KEY` set, the LLM narration falls back to a stateless mock — the **tool/SQL path still runs on real synthetic data**, so you see the distribution. Set a provider key (see `config/llm.example.yaml`) for real insight narration.
+Without `MINIMAX_API_KEY` set, the answer falls back to a stateless **mock placeholder** — the tool/SQL path still executes on the real synthetic data, but the mock reply doesn't render it. Set a provider key (see `config/llm.example.yaml`) to get the real distribution table **and** proactive insight in the answer.
 
 ## Architecture
 

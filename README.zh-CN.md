@@ -32,7 +32,7 @@ cd .. && cd ..
 go run ./cmd/agent -q "玩家的金币余额分布是怎样的？"
 ```
 
-未设置 `MINIMAX_API_KEY` 时，LLM 叙述会回退到无状态 mock —— 但**工具/SQL 路径仍在真实合成数据上运行**，所以你能看到真实分布。配置一个 provider key（见 `config/llm.example.yaml`）即可得到真实的洞察叙述。
+未设置 `MINIMAX_API_KEY` 时，回答会回退到无状态 **mock 占位**——工具/SQL 路径仍在真实合成数据上执行，但 mock 回复不会渲染它。配置一个 provider key（见 `config/llm.example.yaml`）即可在回答里得到真实的**分布表格**和主动洞察。
 
 ## 架构
 
