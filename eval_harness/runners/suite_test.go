@@ -30,7 +30,7 @@ state_tables:
       player_id:         {type: int64, role: actor_id, pk: true, pii: true}
       server_id:         {type: int32, role: dimension}
       level:             {type: int32, role: level}
-      adventure_level:   {type: int32, role: stage_progress}
+      quest_level:   {type: int32, role: stage_progress}
       coins:             {type: int64, role: balance, currency_type: coins}
       last_online_time:  {type: unix_timestamp_seconds, role: last_seen}
 derived_tables:
@@ -179,7 +179,7 @@ func suiteFixtureDB(t *testing.T) *sql.DB {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if _, err := db.Exec(`CREATE TABLE player_basics (player_id TEXT, server_id INTEGER, level INTEGER, adventure_level INTEGER, last_online_time INTEGER)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE player_basics (player_id TEXT, server_id INTEGER, level INTEGER, quest_level INTEGER, last_online_time INTEGER)`); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	tx, err := db.Begin()

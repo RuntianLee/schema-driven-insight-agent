@@ -19,7 +19,7 @@ func basicsDB(t *testing.T, seed func(insert func(server, level, adv, lastOnline
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if _, err := db.Exec(`CREATE TABLE player_basics (player_id TEXT, server_id INTEGER, level INTEGER, adventure_level INTEGER, last_online_time INTEGER)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE player_basics (player_id TEXT, server_id INTEGER, level INTEGER, quest_level INTEGER, last_online_time INTEGER)`); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	tx, _ := db.Begin()
@@ -46,7 +46,7 @@ func bucketByLabel(data []contract.BucketRow, label string) (contract.BucketRow,
 	return contract.BucketRow{}, false
 }
 
-// #5 关卡分布：按 adventure_level 原始值分布（无 bucket_key）。
+// #5 关卡分布：按 quest_level 原始值分布（无 bucket_key）。
 func TestRegression_StageDistribution(t *testing.T) {
 	s := fixtureSchema(t)
 	db := basicsDB(t, func(insert func(server, level, adv, lastOnline int64)) {
@@ -60,7 +60,7 @@ func TestRegression_StageDistribution(t *testing.T) {
 		add(80, 20)
 	})
 	resp := NewDistributionTool(s, db).Run(context.Background(), QueryDistributionInput{
-		Table: "player_basics", Column: "adventure_level", // 无 bucket_key → 原始值分布
+		Table: "player_basics", Column: "quest_level", // 无 bucket_key → 原始值分布
 	})
 	if resp.Status != contract.StatusOK {
 		t.Fatalf("want OK, got %s (%s)", resp.Status, resp.Hint)

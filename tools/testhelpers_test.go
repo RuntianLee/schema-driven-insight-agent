@@ -19,7 +19,7 @@ state_tables:
       player_id:         {type: int64, role: actor_id, pk: true, pii: true}
       server_id:         {type: int32, role: dimension}
       level:             {type: int32, role: level}
-      adventure_level:   {type: int32, role: stage_progress}
+      quest_level:   {type: int32, role: stage_progress}
       coins:             {type: int64, role: balance, currency_type: coins}
       last_online_time:  {type: unix_timestamp_seconds, role: last_seen}
 derived_tables:

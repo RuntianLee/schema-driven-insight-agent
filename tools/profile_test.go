@@ -20,7 +20,7 @@ func profileFixtureDB(t *testing.T, seed func(insert func(server, level, adv, la
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if _, err := db.Exec(`CREATE TABLE player_basics (player_id TEXT, server_id INTEGER, level INTEGER, adventure_level INTEGER, last_online_time INTEGER)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE player_basics (player_id TEXT, server_id INTEGER, level INTEGER, quest_level INTEGER, last_online_time INTEGER)`); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	tx, err := db.Begin()
@@ -57,7 +57,7 @@ func TestProfile_StageDistribution(t *testing.T) {
 		add(80, 20)
 	})
 	resp := NewDistributionTool(s, db).Run(context.Background(), QueryDistributionInput{
-		Table: "player_basics", Column: "adventure_level",
+		Table: "player_basics", Column: "quest_level",
 	})
 	if resp.Status != contract.StatusOK {
 		t.Fatalf("status = %s (%s)", resp.Status, resp.Hint)
@@ -99,7 +99,7 @@ func TestProfile_InsufficientData(t *testing.T) {
 		insert(1, 50, 10, 1716000000) // 仅 1 行 < 100
 	})
 	resp := NewDistributionTool(s, db).Run(context.Background(), QueryDistributionInput{
-		Table: "player_basics", Column: "adventure_level",
+		Table: "player_basics", Column: "quest_level",
 	})
 	if resp.Status != contract.StatusInsufficient {
 		t.Fatalf("status = %s, want INSUFFICIENT_DATA", resp.Status)
@@ -198,11 +198,11 @@ func TestProfile_RowsAttachThreshold(t *testing.T) {
 	// distinct=1000：恰阈值，Data 应填
 	dbAt := profileFixtureDB(t, func(insert func(server, level, adv, lastOnline int64)) {
 		for v := int64(1); v <= 1000; v++ {
-			insert(1, 50, v, 1716000000) // 每个 adventure_level 灌 1 行 → distinct=1000, count=1000
+			insert(1, 50, v, 1716000000) // 每个 quest_level 灌 1 行 → distinct=1000, count=1000
 		}
 	})
 	resp := NewDistributionTool(s, dbAt).Run(context.Background(), QueryDistributionInput{
-		Table: "player_basics", Column: "adventure_level",
+		Table: "player_basics", Column: "quest_level",
 	})
 	if resp.Status != contract.StatusOK {
 		t.Fatalf("status = %s", resp.Status)
@@ -221,7 +221,7 @@ func TestProfile_RowsAttachThreshold(t *testing.T) {
 		}
 	})
 	resp2 := NewDistributionTool(s, dbOver).Run(context.Background(), QueryDistributionInput{
-		Table: "player_basics", Column: "adventure_level",
+		Table: "player_basics", Column: "quest_level",
 	})
 	if resp2.Status != contract.StatusOK {
 		t.Fatalf("status = %s", resp2.Status)
@@ -287,7 +287,7 @@ func TestProfile_LargeDistinct_DataOmittedProfileFilled(t *testing.T) {
 		}
 	})
 	resp := NewDistributionTool(s, db).Run(context.Background(), QueryDistributionInput{
-		Table: "player_basics", Column: "adventure_level",
+		Table: "player_basics", Column: "quest_level",
 	})
 	if resp.Status != contract.StatusOK {
 		t.Fatalf("status = %s", resp.Status)
@@ -322,7 +322,7 @@ func TestProfile_EmptyTable_InsufficientNotSchemaError(t *testing.T) {
 		// 不灌任何数据 → player_basics 空表
 	})
 	resp := NewDistributionTool(s, db).Run(context.Background(), QueryDistributionInput{
-		Table: "player_basics", Column: "adventure_level",
+		Table: "player_basics", Column: "quest_level",
 	})
 	if resp.Status != contract.StatusInsufficient {
 		t.Fatalf("status = %s, want INSUFFICIENT (NOT SchemaError); detail=%v", resp.Status, resp.Detail)
@@ -350,7 +350,7 @@ state_tables:
       player_id:        {type: int64, role: actor_id, pii: true}
       server_id:        {type: int32, role: dimension}
       level:            {type: int16, role: level}
-      adventure_level:  {type: int16, role: stage_progress}
+      quest_level:  {type: int16, role: stage_progress}
       last_online_time: {type: unix_timestamp_seconds, role: last_seen}
 glossary:
   buckets:
@@ -429,7 +429,7 @@ state_tables:
       player_id:        {type: int64, role: actor_id, pii: true}
       server_id:        {type: int32, role: dimension}
       level:            {type: int16, role: level}
-      adventure_level:  {type: int16, role: stage_progress}
+      quest_level:  {type: int16, role: stage_progress}
       last_online_time: {type: unix_timestamp_seconds, role: last_seen}
 `
 	s, err := schema_protocol.Parse([]byte(yamlSrc))
@@ -482,7 +482,7 @@ state_tables:
       player_id:        {type: int64, role: actor_id, pii: true}
       server_id:        {type: int32, role: dimension}
       level:            {type: int16, role: level}
-      adventure_level:  {type: int16, role: stage_progress}
+      quest_level:  {type: int16, role: stage_progress}
       last_online_time: {type: unix_timestamp_seconds, role: last_seen}
 `
 	s, err := schema_protocol.Parse([]byte(yamlSrc))

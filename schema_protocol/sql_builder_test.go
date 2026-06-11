@@ -111,16 +111,16 @@ func TestBuildDistribution_GroupByMultiDimRejected(t *testing.T) {
 
 func TestBuildDistribution_RawValueNoBucket(t *testing.T) {
 	s := loadTestSchema(t)
-	// adventure_level 非 balance + 无 bucket_key → 原始值分布。
+	// quest_level 非 balance + 无 bucket_key → 原始值分布。
 	sql, _, err := s.BuildDistribution(DistQuery{
-		Table: "player_basics", Column: "adventure_level",
+		Table: "player_basics", Column: "quest_level",
 	})
 	if err != nil {
 		t.Fatalf("raw-value build must succeed: %v", err)
 	}
 	for _, want := range []string{
-		"CAST(adventure_level AS TEXT) AS bucket",
-		"adventure_level AS ord",
+		"CAST(quest_level AS TEXT) AS bucket",
+		"quest_level AS ord",
 		"GROUP BY bucket, ord",
 		"cum_pct_players",
 		"ORDER BY ord",

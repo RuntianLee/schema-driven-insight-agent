@@ -23,7 +23,7 @@ func TestDigest_InlineSchema(t *testing.T) {
 		"player_basics (state)", // 段标记锁定（state 表确实被渲染）
 		"player_currencies (derived)",
 		"level",
-		"adventure_level",
+		"quest_level",
 		"server_id",
 		"last_online_time",
 	} {

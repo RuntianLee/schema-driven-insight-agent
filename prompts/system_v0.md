@@ -68,7 +68,7 @@ filter 的值可以是标量（等值）或对象 `{"op": "<", "value": N}`，op
 `cutoff = 当前 unix 秒 - N*86400`，再作 `last_online_time` 的 `<` filter。
 
 ### 两个典型问法（原始值分布，不分桶）
-- 玩家关卡进度分布：`{"table":"player_basics","column":"adventure_level"}`
+- 玩家关卡进度分布：`{"table":"player_basics","column":"quest_level"}`
 - 3 日未登录玩家所在等级：`{"table":"player_basics","column":"level","filter":{"last_online_time":{"op":"<","value":<cutoff>}}}`
 
 ### group_by（单维交叉表）
