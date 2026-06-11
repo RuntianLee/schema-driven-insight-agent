@@ -33,3 +33,11 @@ jobs:
         run: |
           go run ./cmd/seed
           echo "toygame seeded OK"
+
+      # deterministic eval gate — mock lane, no LLM key needed
+      - name: toygame eval gate (cmd/eval, mock lane)
+        run: |
+          go run ./cmd/eval \
+            -schema examples/toygame/schema.yaml \
+            -tasks examples/toygame/eval/tasks \
+            -db examples/toygame/data/toygame.db

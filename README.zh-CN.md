@@ -100,6 +100,7 @@ eval_harness/      评测引擎：data_correctness + LLM-judge 评测器
 llm/               LLM 客户端解析（MiniMax；mock 回退）
 prompts/           方法论 system prompt（不含业务数据）
 cmd/agent/         CLI 入口（REPL + 单发）
+cmd/eval/          eval 任务集运行器（确定性 CI gate；gate 失败退出码 1）
 examples/toygame/  可跑的合成示例 adapter（从这里开始）
 ```
 

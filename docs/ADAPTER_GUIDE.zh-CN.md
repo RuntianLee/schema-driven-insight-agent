@@ -164,6 +164,17 @@ evaluators:
 
 `data_correctness` 把真实工具输出逐字段对比钉死值(确定性 seed 让它精确可断言)。LLM-judge 评测器给叙述质量打分,运行在报告模式。
 
+用 `cmd/eval` 跑任务集(gate 失败时退出码 1——可直接接入 CI):
+
+```bash
+go run ./cmd/eval \
+  -schema examples/toygame/schema.yaml \
+  -tasks examples/toygame/eval/tasks \
+  -db examples/toygame/data/toygame.db
+```
+
+mock 道(默认)无需 LLM key:agent 回放 `llm_turns`、judge 用 mock,`data_correctness` 完全确定性。真 LLM 道传 `-llm minimax -config config/llm.yaml`。
+
 ## 检查清单
 
 - [ ] `schema.yaml`:含 `state_tables`(**标好 PII!**)、可选 pivot、`glossary.buckets`。

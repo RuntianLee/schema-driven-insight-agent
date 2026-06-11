@@ -164,6 +164,17 @@ evaluators:
 
 `data_correctness` compares the real tool output field-by-field against pinned values (a deterministic seed makes this exact). The LLM-judge evaluators score narration quality and run in report mode.
 
+Run the suite with `cmd/eval` (exit code 1 when the gate fails — wire it straight into CI):
+
+```bash
+go run ./cmd/eval \
+  -schema examples/toygame/schema.yaml \
+  -tasks examples/toygame/eval/tasks \
+  -db examples/toygame/data/toygame.db
+```
+
+The mock lane (default) needs no LLM key: the agent replays `llm_turns` and the judge is mocked, so `data_correctness` is fully deterministic. Pass `-llm minimax -config config/llm.yaml` for the real-LLM lane.
+
 ## Checklist
 
 - [ ] `schema.yaml` with `state_tables` (mark PII!), optional pivot, and `glossary.buckets`.

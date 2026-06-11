@@ -100,6 +100,7 @@ eval_harness/      eval engine: data_correctness + LLM-judge evaluators
 llm/               LLM client resolution (MiniMax; mock fallback)
 prompts/           methodology system prompt (no business data)
 cmd/agent/         the CLI entry point (REPL + single-shot)
+cmd/eval/          eval suite runner (deterministic CI gate; exit 1 on gate failure)
 examples/toygame/  runnable synthetic example adapter (start here)
 ```
 
