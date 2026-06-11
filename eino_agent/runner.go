@@ -24,8 +24,13 @@ var _ agent.TrajectoryStore = (trajectory.Recorder)(nil)
 var _ agent.ToolDispatcher = (*tools.Registry)(nil)
 
 const (
-	AgentVersion = "v0.1.0"
+	AgentVersion = "v0.1.2"
 	maxTurns     = 8 // headroom for legitimate SCHEMA_ERROR self-correction (was 5)
+
+	// 成本护栏（maxTurns 之外的第二道闸：步数少但单轮巨大的场景）。
+	// 累计 token（in+out）或累计成本任一超限 → 终止本次 Run（outcome=error，可观测）。
+	maxBudgetTokens = 200_000
+	maxBudgetUSD    = 1.0
 )
 
 type toolCall struct {
@@ -72,6 +77,8 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 	// 约束之外的确定性兜底，避免低活跃数据上 LLM 误判 filter 失效而反复重发同一查询）。
 	seen := make(map[string]string)
 
+	var spentTokens int
+	var spentUSD float64
 	for turn := 0; turn < maxTurns; turn++ {
 		t0 := time.Now()
 		resp, tokIn, tokOut, cost, llmErr := r.llm.Call(ctx, conversation)
@@ -80,11 +87,20 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 			_ = traj.Finalize(ctx, "error", "", llmErr.Error())
 			return "", llmErr
 		}
-
 		call, isToolCall := parseToolCall(resp)
 		if !isToolCall {
 			_ = traj.Finalize(ctx, "success", resp, "")
 			return resp, nil
+		}
+
+		// 预算闸只拦"还要继续循环"的路径——当轮已给出最终回答则照常返回。
+		spentTokens += tokIn + tokOut
+		spentUSD += cost
+		if spentTokens > maxBudgetTokens || spentUSD > maxBudgetUSD {
+			msg := fmt.Sprintf("budget exceeded: tokens=%d (max %d) cost=$%.4f (max $%.2f)",
+				spentTokens, maxBudgetTokens, spentUSD, maxBudgetUSD)
+			_ = traj.Finalize(ctx, "error", "", msg)
+			return "", fmt.Errorf("%s", msg)
 		}
 
 		key := canonicalToolKey(call)

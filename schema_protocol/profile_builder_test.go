@@ -22,9 +22,9 @@ func TestBuildProfile_NonBalance_Structure(t *testing.T) {
 		"MAX(v)",
 		"AVG(v)",
 		"ROW_NUMBER() OVER (ORDER BY v) AS rn",
-		"FROM ordered WHERE rn = MAX(1, CAST(s.tot * 0.10 AS INTEGER))",
-		"FROM ordered WHERE rn = MAX(1, CAST(s.tot * 0.50 AS INTEGER))",
-		"FROM ordered WHERE rn = MAX(1, CAST(s.tot * 0.99 AS INTEGER))",
+		"FROM ordered WHERE rn = MAX(1, (s.tot * 10 + 99) / 100)",
+		"FROM ordered WHERE rn = MAX(1, (s.tot * 50 + 99) / 100)",
+		"FROM ordered WHERE rn = MAX(1, (s.tot * 99 + 99) / 100)",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("profile SQL missing %q: %s", want, sql)

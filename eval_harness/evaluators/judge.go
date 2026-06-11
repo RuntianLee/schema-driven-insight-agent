@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
 	"gopkg.in/yaml.v3"
@@ -41,11 +42,11 @@ func (j *judgeEvaluator) Evaluate(ctx context.Context, res TaskResult, spec *yam
 	if err != nil {
 		return Score{}, fmt.Errorf("%s judge call: %w", j.name, err)
 	}
-	var reply judgeReply
-	if err := json.Unmarshal([]byte(raw), &reply); err != nil {
+	reply, perr := parseJudgeReply(raw)
+	if perr != nil {
 		// R3：解析失败不中断 suite，记 0 分 + 原文。
 		return Score{Evaluator: j.name, Value: 0, Pass: false,
-			Display: "解析失败", Detail: fmt.Sprintf("judge 输出非 JSON: %q", raw)}, nil
+			Display: "解析失败", Detail: fmt.Sprintf("judge 输出无效: %v（原文 %q）", perr, raw)}, nil
 	}
 	below := sp.MinScore > 0 && reply.Score < sp.MinScore
 	return Score{
@@ -55,6 +56,24 @@ func (j *judgeEvaluator) Evaluate(ctx context.Context, res TaskResult, spec *yam
 		Display:   fmt.Sprintf("%d/5 %s", reply.Score, markBelow(below)),
 		Detail:    reply.Reason,
 	}, nil
+}
+
+// parseJudgeReply 容错解析 judge 输出：真 LLM 常包 markdown fence 或前后缀 prose，
+// 从首个 { 起按单个 JSON 值解码；score 必须在 [1,5]（prompt 约定），越界视为无效
+// （防 Value 越界污染报告，如 score=7 → 1.4）。
+func parseJudgeReply(raw string) (judgeReply, error) {
+	start := strings.Index(raw, "{")
+	if start < 0 {
+		return judgeReply{}, fmt.Errorf("非 JSON")
+	}
+	var reply judgeReply
+	if err := json.NewDecoder(strings.NewReader(raw[start:])).Decode(&reply); err != nil {
+		return judgeReply{}, fmt.Errorf("JSON 解析失败: %w", err)
+	}
+	if reply.Score < 1 || reply.Score > 5 {
+		return judgeReply{}, fmt.Errorf("score %d 越界（须 1-5）", reply.Score)
+	}
+	return reply, nil
 }
 
 func markBelow(below bool) string {

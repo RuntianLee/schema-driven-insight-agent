@@ -17,8 +17,11 @@ import (
 //	[, total]            -- 仅 role=balance
 //
 // 注：第一列在 SQL 中 alias 为 `tot`（非 spec §2.1 字面的 `cnt`），是为了在
-// 百分位子查询 `(SELECT v FROM ordered WHERE rn = MAX(1, CAST(s.tot * p AS INTEGER)))`
+// 百分位子查询 `(SELECT v FROM ordered WHERE rn = MAX(1, (s.tot * P + 99) / 100))`
 // 中以 `s.tot` 形式引用。Task 3 的 scan 按位置绑定，列名不影响契约。
+// 百分位 rank = ceil(tot * p)（标准 nearest-rank），用整数运算 (tot*P+99)/100 实现
+// ceil（P 为百分数整数），不依赖 SQLite math 扩展；此前 CAST(...AS INTEGER) 是截断
+// （floor），N 非整除点时取行偏低一位。
 // 数值稳定性：variance = E[v²] - E[v]² 在大 balance 值时可能浮点抵消失精度；
 // 真实数据若触发，迁移到 Welford 两遍算法（spec §7.1）。
 // SYNC: 列顺序必须与 tools.query_distribution 的 profile scan 严格对应。
@@ -51,13 +54,13 @@ func (s *Schema) BuildProfile(q DistQuery) (string, []any, error) {
 			"COALESCE((SUM(v*v)*1.0/NULLIF(COUNT(*),0) - AVG(v)*AVG(v)), 0) AS variance FROM base), "+
 			"ordered AS (SELECT v, ROW_NUMBER() OVER (ORDER BY v) AS rn FROM base) "+
 			"SELECT s.tot, s.distinct_cnt, s.mn, s.mx, s.mean, s.variance, "+
-			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, CAST(s.tot * 0.10 AS INTEGER))), 0) AS p10, "+
-			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, CAST(s.tot * 0.25 AS INTEGER))), 0) AS p25, "+
-			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, CAST(s.tot * 0.50 AS INTEGER))), 0) AS p50, "+
-			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, CAST(s.tot * 0.75 AS INTEGER))), 0) AS p75, "+
-			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, CAST(s.tot * 0.90 AS INTEGER))), 0) AS p90, "+
-			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, CAST(s.tot * 0.95 AS INTEGER))), 0) AS p95, "+
-			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, CAST(s.tot * 0.99 AS INTEGER))), 0) AS p99",
+			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, (s.tot * 10 + 99) / 100)), 0) AS p10, "+
+			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, (s.tot * 25 + 99) / 100)), 0) AS p25, "+
+			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, (s.tot * 50 + 99) / 100)), 0) AS p50, "+
+			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, (s.tot * 75 + 99) / 100)), 0) AS p75, "+
+			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, (s.tot * 90 + 99) / 100)), 0) AS p90, "+
+			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, (s.tot * 95 + 99) / 100)), 0) AS p95, "+
+			"COALESCE((SELECT v FROM ordered WHERE rn = MAX(1, (s.tot * 99 + 99) / 100)), 0) AS p99",
 		q.Column, q.Table, where,
 	)
 	if isBalance {

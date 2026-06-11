@@ -72,7 +72,7 @@ func TestProfile_StageDistribution(t *testing.T) {
 	if p.Min != 10 || p.Max != 80 {
 		t.Fatalf("min/max = %v/%v, want 10/80", p.Min, p.Max)
 	}
-	// nearest-rank：p50 取第 max(1, floor(200*0.50)) = 第 100 行，按 v 升序：前 120 行均为 10 → p50=10
+	// nearest-rank：p50 取第 max(1, ceil(200*0.50)) = 第 100 行，按 v 升序：前 120 行均为 10 → p50=10
 	if p.Median != 10 {
 		t.Fatalf("median = %v, want 10 (nearest-rank)", p.Median)
 	}
@@ -305,6 +305,40 @@ func TestProfile_LargeDistinct_DataOmittedProfileFilled(t *testing.T) {
 	// nearest-rank：p50 取第 750 行（v=750），p10 取第 150 行（v=150）
 	if p.Median != 750 || p.P10 != 150 {
 		t.Fatalf("p50/p10 = %v/%v, want 750/150", p.Median, p.P10)
+	}
+	if len(p.TopN) != defaultValueTopN {
+		t.Fatalf("TopN length = %d, want %d", len(p.TopN), defaultValueTopN)
+	}
+	if p.TailCount != p.Count-int64(defaultValueTopN) { // 每值 1 行 → Top-N head=10
+		t.Fatalf("tail_count = %d, want %d", p.TailCount, p.Count-int64(defaultValueTopN))
+	}
+}
+
+// 非整除点回归：N=101 时 p50 rank = ceil(101*0.50) = 51（标准 nearest-rank）。
+// 此前截断实现取第 50 行——本用例钉死 ceil 口径。
+func TestProfile_NearestRankCeilOddN(t *testing.T) {
+	s := fixtureSchema(t)
+	db := profileFixtureDB(t, func(insert func(server, level, adv, lastOnline int64)) {
+		for v := int64(1); v <= 101; v++ {
+			insert(1, 50, v, 1716000000)
+		}
+	})
+	tool := NewDistributionTool(s, db)
+	resp := tool.Run(context.Background(), QueryDistributionInput{
+		Table: "player_basics", Column: "quest_level",
+	})
+	if resp.Status != contract.StatusOK {
+		t.Fatalf("status = %s (%s)", resp.Status, resp.Hint)
+	}
+	p := resp.Profile
+	if p == nil || p.Count != 101 {
+		t.Fatalf("profile: %+v", p)
+	}
+	if p.Median != 51 {
+		t.Fatalf("median = %v, want 51 (ceil nearest-rank)", p.Median)
+	}
+	if p.P25 != 26 { // ceil(101*0.25)=26
+		t.Fatalf("p25 = %v, want 26", p.P25)
 	}
 	if len(p.TopN) != defaultValueTopN {
 		t.Fatalf("TopN length = %d, want %d", len(p.TopN), defaultValueTopN)

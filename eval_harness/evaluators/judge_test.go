@@ -53,3 +53,29 @@ func TestJudgeParseMalformedJSON(t *testing.T) {
 		t.Fatalf("want value 0 + detail, got %+v", s)
 	}
 }
+
+func TestJudgeParseMarkdownFence(t *testing.T) {
+	// 真 LLM 常包 markdown fence——应能剥离解析。
+	e := NewReasoningQuality(constJudge("```json\n{\"score\":4,\"reason\":\"好\"}\n```"))
+	s, err := e.Evaluate(context.Background(), TaskResult{Answer: "x"}, specNode(t, `rubric: "r"`))
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if s.Value != 0.8 { // 4/5
+		t.Fatalf("fence 包裹的 JSON 应解析成功, got %+v", s)
+	}
+}
+
+func TestJudgeScoreOutOfRange(t *testing.T) {
+	// score 越界（prompt 约定 1-5）视为无效 → Value 0，不得产生 >1 的越界 Value。
+	for _, raw := range []string{`{"score":7,"reason":"x"}`, `{"score":0,"reason":"x"}`, `{"score":-1,"reason":"x"}`} {
+		e := NewReasoningQuality(constJudge(raw))
+		s, err := e.Evaluate(context.Background(), TaskResult{Answer: "x"}, specNode(t, `rubric: "r"`))
+		if err != nil {
+			t.Fatalf("out-of-range must not error the suite: %v", err)
+		}
+		if s.Value != 0 {
+			t.Fatalf("score 越界应记 0, got %+v (raw=%s)", s, raw)
+		}
+	}
+}

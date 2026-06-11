@@ -86,6 +86,17 @@ The repo ships a complete, runnable example: [`examples/toygame`](examples/toyga
 
 See **[docs/ADAPTER_GUIDE.md](docs/ADAPTER_GUIDE.md)** — a step-by-step guide using `examples/toygame` as the scaffold.
 
+## Security model
+
+What the framework guarantees, and where the trust boundary sits:
+
+- **`schema.yaml` is the trust boundary.** It is authored by the adapter developer and treated as trusted input — but defensively validated anyway: table/column names must match `^[A-Za-z_][A-Za-z0-9_]*$`, bucket labels are quote-escaped before inlining, and every identifier must pass the schema whitelist before reaching SQL.
+- **The LLM never emits SQL.** It emits structured tool arguments; SQL is built by the framework with filter values bound as `?` parameters and a fixed operator whitelist.
+- **PII is enforced on three faces with one rule.** Columns marked `pii` / `omit_in_layer2` are rejected at query build time, never materialized into Layer 2, and never shown in the schema digest fed to the LLM.
+- **The agent never touches your production DB.** It reads only the Layer-2 SQLite snapshot; the ETL side connects read-only (`default_transaction_read_only` + statement timeout).
+- **Trajectories are redacted on write** (questions, steps, and final outputs) and `trajectory.db` is gitignored. API keys load from env / gitignored config and are never logged.
+- **Known injection surface:** tool results (including `CAST AS TEXT` values of DB text columns) are fed back into the LLM conversation. With numeric game data this is inert; if your adapter exposes user-generated TEXT columns (nicknames, signatures), their content reaches the prompt — mark such columns `pii`/`omit_in_layer2`, or expose them deliberately and treat the narration as untrusted.
+
 ## Repository layout
 
 ```
