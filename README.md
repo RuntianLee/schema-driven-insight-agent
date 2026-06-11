@@ -1,5 +1,7 @@
 # schema-driven-insight-agent
 
+**English** | [简体中文](README.zh-CN.md)
+
 **A schema-driven data-insight AI agent framework.** Point it at a new dataset by writing one `schema.yaml` and a thin adapter — the agent answers natural-language operational questions with distribution tables **and proactive insights**, never touching your production database directly.
 
 > Built for game-operations analytics, but the core carries **zero business hardcoding** — all domain knowledge lives in the adapter's `schema.yaml`. Swap the schema, get a new analyst.
