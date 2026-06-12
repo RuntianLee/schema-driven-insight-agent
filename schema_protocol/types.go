@@ -9,7 +9,19 @@ type Schema struct {
 	StateTables   map[string]Table
 	DerivedTables map[string]Table
 	Glossary      Glossary
-	Tuning        Tuning // 可选画像/查询阈值（缺省由 tool 侧用 framework 常量回退）
+	Tuning        Tuning     // 可选画像/查询阈值（缺省由 tool 侧用 framework 常量回退）
+	ETLPolicy     *ETLPolicy // 可选 ETL 运行参数；nil = 未声明（旧 schema 兼容）
+}
+
+// ETLPolicy 承载 ETL 运行参数——原 adapter etl.go 手写常量归位 schema（零代码接入 v0.2）。
+// cmd/etl 与 cmd/seed 要求非 nil；其余消费方（agent/tools）不读它。
+type ETLPolicy struct {
+	HashSalt      string // 脱敏盐（与 HashSaltEnv 二选一；env 非空时优先）
+	HashSaltEnv   string // 持有盐值的环境变量名（保密场景）
+	MinRows       int    // 抽取行数安全闸门（必填 >0，防空/半截抽取覆盖好库）
+	HealthMinRows int64  // Agent 启动 Ready() 行数下限；0=未设置（用 etl_health 包默认）
+	Frozen        bool   // 冻结历史快照（跳过 24h 失鲜检查）
+	HealthPath    string // health 文件路径（相对 schema 目录）；空=与 layer2 db 同目录 etl_health.json
 }
 
 // Tuning 承载 query_distribution 的画像/Top-N 阈值。
@@ -53,6 +65,7 @@ type FieldDef struct {
 	OmitInLayer2 bool
 	CurrencyType string
 	GlossaryKey  string
+	Index        bool // true → ETL 对该列建索引（仅允许物化列；cmd/init 草稿给建议）
 }
 
 type Glossary struct {

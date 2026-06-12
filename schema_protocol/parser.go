@@ -22,6 +22,16 @@ type rawSchema struct {
 	DerivedTables map[string]rawTable  `yaml:"derived_tables"`
 	Glossary      rawGlossary          `yaml:"glossary"`
 	Tuning        rawTuning            `yaml:"tuning"`
+	ETLPolicy     *rawETLPolicy        `yaml:"etl_policy"`
+}
+
+type rawETLPolicy struct {
+	HashSalt      string `yaml:"hash_salt"`
+	HashSaltEnv   string `yaml:"hash_salt_env"`
+	MinRows       int    `yaml:"min_rows"`
+	HealthMinRows int64  `yaml:"health_min_rows"`
+	Frozen        bool   `yaml:"frozen"`
+	HealthPath    string `yaml:"health_path"`
 }
 
 type rawTuning struct {
@@ -59,20 +69,34 @@ type rawBucket struct {
 }
 
 // FieldDef 的 YAML 标签（与 §6 schema 规范对齐；未声明键被忽略）。
+// role: TODO / pii: TODO 是 cmd/init 草稿的占位——拒绝解析，强制人工标注后才可运行
+// （安全闸：杜绝「忘标 PII 就物化」）。
 func (f *FieldDef) UnmarshalYAML(value *yaml.Node) error {
 	var raw struct {
-		Type         string `yaml:"type"`
-		Role         string `yaml:"role"`
-		PK           bool   `yaml:"pk"`
-		PII          bool   `yaml:"pii"`
-		OmitInLayer2 bool   `yaml:"omit_in_layer2"`
-		CurrencyType string `yaml:"currency_type"`
-		GlossaryKey  string `yaml:"glossary_key"`
+		Type         string    `yaml:"type"`
+		Role         string    `yaml:"role"`
+		PK           bool      `yaml:"pk"`
+		PII          yaml.Node `yaml:"pii"`
+		OmitInLayer2 bool      `yaml:"omit_in_layer2"`
+		CurrencyType string    `yaml:"currency_type"`
+		GlossaryKey  string    `yaml:"glossary_key"`
+		Index        bool      `yaml:"index"`
 	}
 	if err := value.Decode(&raw); err != nil {
 		return err
 	}
-	*f = FieldDef(raw)
+	if raw.Role == "TODO" {
+		return fmt.Errorf("role: TODO 未标注——cmd/init 草稿必须人工完成 role 标注后才可使用")
+	}
+	var pii bool
+	if !raw.PII.IsZero() {
+		if err := raw.PII.Decode(&pii); err != nil {
+			return fmt.Errorf("pii 必须是 true/false（cmd/init 草稿需人工标注）: %w", err)
+		}
+	}
+	*f = FieldDef{Type: raw.Type, Role: raw.Role, PK: raw.PK, PII: pii,
+		OmitInLayer2: raw.OmitInLayer2, CurrencyType: raw.CurrencyType,
+		GlossaryKey: raw.GlossaryKey, Index: raw.Index}
 	return nil
 }
 
@@ -100,6 +124,13 @@ func Parse(yamlBytes []byte) (*Schema, error) {
 			PerGroupRowsAttachThreshold: r.Tuning.PerGroupRowsAttachThreshold,
 		},
 	}
+	if r.ETLPolicy != nil {
+		s.ETLPolicy = &ETLPolicy{
+			HashSalt: r.ETLPolicy.HashSalt, HashSaltEnv: r.ETLPolicy.HashSaltEnv,
+			MinRows: r.ETLPolicy.MinRows, HealthMinRows: r.ETLPolicy.HealthMinRows,
+			Frozen: r.ETLPolicy.Frozen, HealthPath: r.ETLPolicy.HealthPath,
+		}
+	}
 	for k, v := range r.DataSources {
 		s.DataSources[k] = DataSource{Type: v.Type, DSNEnv: v.DSNEnv, Access: v.Access, Path: v.Path}
 	}
@@ -125,7 +156,43 @@ func Parse(yamlBytes []byte) (*Schema, error) {
 	if err := validateIdentifiers(s); err != nil {
 		return nil, err
 	}
+	if err := validateETLPolicy(s); err != nil {
+		return nil, err
+	}
+	if err := validateIndexFlags(s); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// validateETLPolicy：声明了 etl_policy 时的参数边界（未声明=旧 schema，跳过）。
+func validateETLPolicy(s *Schema) error {
+	p := s.ETLPolicy
+	if p == nil {
+		return nil
+	}
+	if p.MinRows <= 0 {
+		return fmt.Errorf("etl_policy.min_rows 必须 > 0（行数安全闸门必填）")
+	}
+	if p.HealthMinRows < 0 {
+		return fmt.Errorf("etl_policy.health_min_rows 不可为负")
+	}
+	if len(s.DerivedTables) > 0 && p.HashSalt == "" && p.HashSaltEnv == "" {
+		return fmt.Errorf("etl_policy: 声明了派生表时 hash_salt 与 hash_salt_env 至少设一个")
+	}
+	return nil
+}
+
+// validateIndexFlags：index: true 仅允许出现在将物化进 Layer2 的列上。
+func validateIndexFlags(s *Schema) error {
+	for name, t := range s.StateTables {
+		for col, fd := range t.Fields {
+			if fd.Index && (fd.PII || fd.OmitInLayer2) {
+				return fmt.Errorf("state_tables %s: 列 %q 标了 index 但不物化（pii/omit_in_layer2）", name, col)
+			}
+		}
+	}
+	return nil
 }
 
 // validateIdentifiers 校验所有表名/列名为安全 SQL 标识符（见 reIdent 注释）。
