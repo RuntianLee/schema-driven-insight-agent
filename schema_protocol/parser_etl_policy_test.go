@@ -81,6 +81,36 @@ func TestParse_PolicyValidation(t *testing.T) {
 	}
 }
 
+func TestParse_BareETLPolicyRejected(t *testing.T) {
+	// 裸 `etl_policy:`（YAML null）不得静默绕过安全闸——必须明确报错。
+	bare := strings.Replace(policySchema,
+		"etl_policy:\n  hash_salt: t_v0\n  min_rows: 5000\n  health_min_rows: 9000\n  frozen: true\n  health_path: ./data/etl_health_t.json",
+		"etl_policy:", 1)
+	if _, err := Parse([]byte(bare)); err == nil || !strings.Contains(err.Error(), "etl_policy") {
+		t.Errorf("裸 etl_policy: 应拒绝且错误含 etl_policy, got %v", err)
+	}
+}
+
+func TestParse_EmptyETLPolicyBlockRejected(t *testing.T) {
+	// `etl_policy: {}` 解码出零值，min_rows 必填闸门兜住——钉住现有行为。
+	empty := strings.Replace(policySchema,
+		"etl_policy:\n  hash_salt: t_v0\n  min_rows: 5000\n  health_min_rows: 9000\n  frozen: true\n  health_path: ./data/etl_health_t.json",
+		"etl_policy: {}", 1)
+	if _, err := Parse([]byte(empty)); err == nil || !strings.Contains(err.Error(), "min_rows") {
+		t.Errorf("etl_policy: {} 应拒绝且错误含 min_rows, got %v", err)
+	}
+}
+
+func TestParse_IndexOnDerivedPIIRejected(t *testing.T) {
+	// 派生表列同样物化进 Layer2：标 pii+index 必须被拒。
+	y := strings.Replace(policySchema,
+		"currency_type: {type: string, role: currency_kind}",
+		"currency_type: {type: string, role: currency_kind, pii: true, index: true}", 1)
+	if _, err := Parse([]byte(y)); err == nil || !strings.Contains(err.Error(), "index") {
+		t.Errorf("派生表 PII 列标 index 应拒绝, got %v", err)
+	}
+}
+
 func TestParse_TODORejected(t *testing.T) {
 	roleTODO := strings.Replace(policySchema,
 		"server_id: {type: int32, role: dimension, index: true}",

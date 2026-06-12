@@ -22,7 +22,7 @@ type rawSchema struct {
 	DerivedTables map[string]rawTable  `yaml:"derived_tables"`
 	Glossary      rawGlossary          `yaml:"glossary"`
 	Tuning        rawTuning            `yaml:"tuning"`
-	ETLPolicy     *rawETLPolicy        `yaml:"etl_policy"`
+	ETLPolicy     yaml.Node            `yaml:"etl_policy"` // 裸键(null) 与 {} 区分见 Parse
 }
 
 type rawETLPolicy struct {
@@ -94,6 +94,7 @@ func (f *FieldDef) UnmarshalYAML(value *yaml.Node) error {
 			return fmt.Errorf("pii 必须是 true/false（cmd/init 草稿需人工标注）: %w", err)
 		}
 	}
+	// 新增 FieldDef 字段需同步此构造。
 	*f = FieldDef{Type: raw.Type, Role: raw.Role, PK: raw.PK, PII: pii,
 		OmitInLayer2: raw.OmitInLayer2, CurrencyType: raw.CurrencyType,
 		GlossaryKey: raw.GlossaryKey, Index: raw.Index}
@@ -124,11 +125,20 @@ func Parse(yamlBytes []byte) (*Schema, error) {
 			PerGroupRowsAttachThreshold: r.Tuning.PerGroupRowsAttachThreshold,
 		},
 	}
-	if r.ETLPolicy != nil {
+	// etl_policy 三态：未声明(IsZero)=旧 schema 兼容；裸键(null)=明确报错，
+	// 不让 nil policy 静默绕过安全闸；否则解码后照旧转换。
+	if !r.ETLPolicy.IsZero() {
+		if r.ETLPolicy.Tag == "!!null" {
+			return nil, fmt.Errorf("etl_policy 为空块——要么删除该键，要么填写 hash_salt/min_rows 等字段")
+		}
+		var raw rawETLPolicy
+		if err := r.ETLPolicy.Decode(&raw); err != nil {
+			return nil, fmt.Errorf("etl_policy 解码失败: %w", err)
+		}
 		s.ETLPolicy = &ETLPolicy{
-			HashSalt: r.ETLPolicy.HashSalt, HashSaltEnv: r.ETLPolicy.HashSaltEnv,
-			MinRows: r.ETLPolicy.MinRows, HealthMinRows: r.ETLPolicy.HealthMinRows,
-			Frozen: r.ETLPolicy.Frozen, HealthPath: r.ETLPolicy.HealthPath,
+			HashSalt: raw.HashSalt, HashSaltEnv: raw.HashSaltEnv,
+			MinRows: raw.MinRows, HealthMinRows: raw.HealthMinRows,
+			Frozen: raw.Frozen, HealthPath: raw.HealthPath,
 		}
 	}
 	for k, v := range r.DataSources {
@@ -184,12 +194,24 @@ func validateETLPolicy(s *Schema) error {
 }
 
 // validateIndexFlags：index: true 仅允许出现在将物化进 Layer2 的列上。
+// 派生表同样物化进 Layer2，故 state ∪ derived 都要覆盖。
 func validateIndexFlags(s *Schema) error {
-	for name, t := range s.StateTables {
+	check := func(kind, name string, t Table) error {
 		for col, fd := range t.Fields {
 			if fd.Index && (fd.PII || fd.OmitInLayer2) {
-				return fmt.Errorf("state_tables %s: 列 %q 标了 index 但不物化（pii/omit_in_layer2）", name, col)
+				return fmt.Errorf("%s %s: 列 %q 标了 index 但不物化（pii/omit_in_layer2）", kind, name, col)
 			}
+		}
+		return nil
+	}
+	for name, t := range s.StateTables {
+		if err := check("state_tables", name, t); err != nil {
+			return err
+		}
+	}
+	for name, t := range s.DerivedTables {
+		if err := check("derived_tables", name, t); err != nil {
+			return err
 		}
 	}
 	return nil
