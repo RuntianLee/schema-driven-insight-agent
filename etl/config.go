@@ -103,3 +103,34 @@ func (c PGConfig) resolvePassword() (string, error) {
 	}
 	return "", fmt.Errorf("db password not found: set password or password_env")
 }
+
+// ResolveDSNFromConfig 解析生产 PG 连接（td etl-runner 的三级解析上提为通用）：
+//  1. cfgPath 文件存在 → 严格解析 + DSN()；任何错误硬失败（不静默回退）。
+//  2. 文件不存在（os.ErrNotExist）且 dsnEnv 环境变量非空 → 用 env。
+//  3. 都没有 → 带 setup 指引的错误。
+//
+// 返回 summary 为可安全打印的非密摘要。SECURITY: 返回的 dsn 绝不打印/入日志。
+func ResolveDSNFromConfig(cfgPath, dsnEnv string) (dsn, summary string, err error) {
+	raw, readErr := os.ReadFile(cfgPath)
+	if readErr == nil {
+		cfg, parseErr := ParsePGConfig(raw)
+		if parseErr != nil {
+			return "", "", fmt.Errorf("PG config parse error (%s): %w", cfgPath, parseErr)
+		}
+		d, dsnErr := cfg.DSN()
+		if dsnErr != nil {
+			return "", "", fmt.Errorf("PG config resolve error (%s): %w", cfgPath, dsnErr)
+		}
+		return d, fmt.Sprintf("host=%s port=%d db=%s user=%s (config: %s)",
+			cfg.Host, cfg.Port, cfg.DBName, cfg.User, cfgPath), nil
+	}
+	if !errors.Is(readErr, os.ErrNotExist) {
+		return "", "", fmt.Errorf("PG config unreadable (%s): %w", cfgPath, readErr)
+	}
+	if dsnEnv != "" {
+		if v := os.Getenv(dsnEnv); v != "" {
+			return v, fmt.Sprintf("(%s env)", dsnEnv), nil
+		}
+	}
+	return "", "", fmt.Errorf("PG 未配置：创建 %s（YAML 字段：host/port/user/dbname/sslmode/password_env）或设置环境变量 %s", cfgPath, dsnEnv)
+}
