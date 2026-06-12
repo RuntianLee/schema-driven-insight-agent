@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-**A schema-driven data-insight AI agent framework.** Point it at a new dataset by writing one `schema.yaml` and a thin adapter — the agent answers natural-language operational questions with distribution tables **and proactive insights**, never touching your production database directly.
+**A schema-driven data-insight AI agent framework.** Point it at a new dataset by writing one `schema.yaml` and a db config — **zero Go code** — the agent answers natural-language operational questions with distribution tables **and proactive insights**, never touching your production database directly.
 
 > Built for game-operations analytics, but the core carries **zero business hardcoding** — all domain knowledge lives in the adapter's `schema.yaml`. Swap the schema, get a new analyst.
 
@@ -22,14 +22,20 @@ Most "chat with your data" tools either (a) let an LLM write raw SQL against pro
 
 ```bash
 git clone https://github.com/RuntianLee/schema-driven-insight-agent
-cd schema-driven-insight-agent/examples/toygame
+cd schema-driven-insight-agent
 
-# 1. Generate a synthetic Layer-2 snapshot (1000 fake players, pure Go, no PG)
-go run ./cmd/seed
+# 1. Generate a synthetic Layer-2 snapshot (1000 fake players, declarative, no Go, no PG)
+go run ./cmd/seed -schema examples/toygame/schema.yaml -spec examples/toygame/seed.yaml
 
-# 2. Ask the agent a question (run from the repo root so default paths resolve)
-cd .. && cd ..
+# 2. Ask the agent a question
+SCHEMA_PATH=examples/toygame/schema.yaml \
+SQLITE_PATH=examples/toygame/data/toygame.db \
+ETL_HEALTH_PATH=examples/toygame/data/etl_health.json \
 go run ./cmd/agent -q "玩家的金币余额分布是怎样的？"
+
+# 3. Run the deterministic eval gate (no API key needed)
+go run ./cmd/eval -schema examples/toygame/schema.yaml \
+  -tasks examples/toygame/eval/tasks -db examples/toygame/data/toygame.db
 ```
 
 Without `MINIMAX_API_KEY` set, the answer falls back to a stateless **mock placeholder** — the tool/SQL path still executes on the real synthetic data, but the mock reply doesn't render it. Set a provider key (see `config/llm.example.yaml`) to get the real distribution table **and** proactive insight in the answer.
@@ -76,8 +82,8 @@ flowchart TB
 
 ## How it works
 
-1. **Write a `schema.yaml`** declaring your `state_tables` (columns, `role`, `pii`, `omit_in_layer2`) and `glossary.buckets` (distribution segments).
-2. **Write a thin adapter** that materializes a Layer-2 SQLite snapshot — either a real Postgres ETL (`framework/etl` has read-only pgx helpers) or a synthetic seed (see `examples/toygame`). This is typically **under 200 lines**.
+1. **Write a `schema.yaml`** declaring your `state_tables` (columns, `role`, `pii`, `omit_in_layer2`), `glossary.buckets` (distribution segments), and an `etl_policy` block.
+2. **Materialize a Layer-2 SQLite snapshot with zero Go** — point `cmd/etl` at a real Postgres (read-only pgx introspection) or `cmd/seed` at a declarative `seed.yaml` (synthetic data, see `examples/toygame`). No adapter code to write.
 3. **Run the agent** against that snapshot. It parses your schema into a "Digest" (what the LLM is told it can ask), routes tool calls through the whitelisted SQL builder, and narrates the result.
 
 The repo ships a complete, runnable example: [`examples/toygame`](examples/toygame) — a fictional idle game with synthetic data. Use it as the template for your own adapter.

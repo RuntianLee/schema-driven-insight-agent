@@ -1,6 +1,12 @@
 version: 1
 domain: idle_game_demo
 
+etl_policy:
+  hash_salt: toygame_demo_v0   # 仅示例，非真实 PII
+  min_rows: 1
+  health_min_rows: 100
+  frozen: true                 # 合成快照，跳过失鲜检查
+
 tuning:
   groups_top_n: 5
 
@@ -15,7 +21,7 @@ state_tables:
     primary_key: [player_id]
     fields:
       player_id:  {type: int64, role: actor_id, pk: true, pii: true}
-      level:      {type: int32, role: level}
+      level:      {type: int32, role: level, index: true}
       coins:      {type: int64, role: balance, currency_type: coins}
       last_login: {type: unix_timestamp_seconds, role: last_seen}
 

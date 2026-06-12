@@ -1,24 +1,58 @@
-# Adapter Guide — write your own data adapter
+# Adapter Guide — three-step, zero-code onboarding
 
 **English** | [简体中文](ADAPTER_GUIDE.zh-CN.md)
 
-This framework is **schema-driven**: to support a new dataset you write one `schema.yaml` and a thin adapter that produces a local SQLite snapshot. The agent core stays untouched. This guide walks through it using the runnable [`examples/toygame`](../examples/toygame) adapter as the scaffold — typically **under 200 lines** total.
+This framework is **schema-driven**: to support a new dataset you write **no Go at all**. Onboarding = one `schema.yaml` + a db config (+ optional eval tasks / `seed.yaml`). The bundled generic runners (`cmd/init` / `cmd/etl` / `cmd/seed` / `cmd/agent` / `cmd/eval`) derive currency columns, indexes, `data_as_of`, PII de-identification, and the readiness gate from your schema — an adapter is no longer a chunk of code, just a few declarative YAML files.
 
-An adapter is a **separate Go module** that depends on this framework and provides three things:
+The living proof is [`examples/toygame`](../examples/toygame): it has **deleted all of its Go**, keeping only `schema.yaml` + `seed.yaml` + eval tasks, and still runs seed → agent → eval end-to-end. Use it as the template for your own adapter.
 
-1. a `schema.yaml` describing your data,
-2. a way to materialize a **Layer-2 SQLite** snapshot (synthetic seed, or a real read-only ETL),
-3. (optional) eval tasks that gate correctness.
+Three steps:
+
+1. **Generate a draft** (`cmd/init` introspects your PG and emits an onboarding package skeleton with TODOs);
+2. **Annotate business knowledge** (complete role/pii, then fill glossary/buckets/etl_policy by domain);
+3. **Run it** (`cmd/etl` for a real DB or `cmd/seed` for synthetic → `cmd/agent` → `cmd/eval`).
 
 ---
 
-## 1. Declare your data: `schema.yaml`
+## Step 1 — Generate a draft (`cmd/init`)
 
-The schema is the **only** place business knowledge lives. Minimal toygame example:
+`cmd/init` **read-only** introspects your production PG and generates an onboarding package draft for the tables you name:
+
+```bash
+go run github.com/RuntianLee/schema-driven-insight-agent/cmd/init@v0.2.0 \
+  -db-config ./config/db.yaml \
+  -tables player_basics \
+  -domain my_game \
+  -out ./my-adapter
+```
+
+Output manifest (all under `-out`):
+
+| File | Contents |
+|---|---|
+| `schema.yaml` | Schema draft — table/column structure filled in, `role`/`pii` are **TODO placeholders** for you to annotate. |
+| `db-config.example.yaml` | PG connection config template (copy to a real `db.yaml`, **never commit it**). |
+| `eval/tasks/example_task.yaml` | Eval task skeleton (with an inline `fixture:` example). |
+| `seed.example.yaml` | `seed.yaml` draft (one generator stub per materializable column). |
+| `.gitignore` | Excludes `db.yaml` / `data/` / `*.db` / `etl_health*.json` from the repo. |
+
+Introspection is **read-only**: it never writes to production and never prints the DSN (logs emit only a non-secret summary). The real DSN lives in the gitignored `db.yaml`.
+
+## Step 2 — Annotate business knowledge
+
+The draft's `role`/`pii` are `TODO` placeholders. **The draft is not runnable as-is**: the parser rejects any leftover `TODO` — this is a safety gate, so you **cannot** forget to mark PII and then materialize it into Layer 2. Once every TODO is done, fill in `glossary`, `glossary.buckets`, `derived_tables` (pivot), `scope`, and `etl_policy` per your domain.
+
+The minimal toygame shape:
 
 ```yaml
 version: 1
 domain: idle_game_demo
+
+etl_policy:
+  hash_salt: toygame_demo_v0   # example only, not real PII
+  min_rows: 1
+  health_min_rows: 100
+  frozen: true                 # synthetic snapshot, skip staleness check
 
 data_sources:
   layer2:
@@ -31,12 +65,12 @@ state_tables:
     primary_key: [player_id]
     fields:
       player_id:  {type: int64, role: actor_id, pk: true, pii: true}
-      level:      {type: int32, role: level}
+      level:      {type: int32, role: level, index: true}
       coins:      {type: int64, role: balance, currency_type: coins}
       last_login: {type: unix_timestamp_seconds, role: last_seen}
 
 derived_tables:
-  player_currencies:                # a "pivot" of balance columns into long form
+  player_currencies:                # pivot balance columns into a long table
     derived_from: player_basics
     method: pivot_money_columns
     schema:
@@ -46,141 +80,163 @@ derived_tables:
 
 glossary:
   currency_types:
-    coins: "in-game coins (demo)"
+    coins: "in-game coins (example)"
   buckets:
     coins_balance:                  # distribution segments for the `balance` column
       - {min: 0,     max: 100,   label: "0~100"}
       - {min: 101,   max: 1000,  label: "101~1k"}
       - {min: 1001,  max: 10000, label: "1k~1w"}
-      - {min: 10001, max: null,  label: "1w+"}   # null max = +∞ (last bucket)
+      - {min: 10001, max: null,  label: "1w+"}   # max: null means +∞ (last bucket)
 ```
 
 Key field attributes:
 
-| attribute | meaning |
+| Attribute | Meaning |
 |---|---|
-| `role` | semantic tag (`actor_id`, `level`, `balance`, `last_seen`, …). Drives which output columns the tool emits (e.g. only `role: balance` gets value totals/averages). |
-| `pii: true` | **never** materialized to Layer 2, never in the Digest, never queryable. |
-| `omit_in_layer2: true` | non-PII but excluded from the snapshot (e.g. internal columns). |
-| `glossary.buckets.<key>` | distribution segments. `max` is the inclusive upper bound; ascending; the last bucket uses `max: null` for +∞. |
+| `role` | Semantic role (`actor_id`, `level`, `balance`, `last_seen`, …). Decides which columns the tool outputs (e.g. only `role: balance` yields total/per-capita). **It's a TODO in the draft — you must annotate it.** |
+| `pii: true` | **Never** materialized into Layer 2, never in the Digest, never queryable. |
+| `omit_in_layer2: true` | Non-PII but excluded from the snapshot (e.g. internal columns). |
+| `index: true` | Build an index on this Layer-2 column (materialized columns only; marking a PII column `index` is rejected). |
+| `glossary.buckets.<key>` | Distribution segments. `max` is an **inclusive** upper bound, ascending; the last bucket uses `max: null` for +∞. |
 
-The parser validates bucket monotonicity and the column/role whitelist. A field marked `pii` is dropped from materialization automatically — you cannot accidentally leak it.
+**PII red line**: fields marked `pii` are automatically stripped at materialization — you **cannot** leak them by accident. PII is guarded on three faces with one rule: rejected at query build time, never materialized into Layer 2, never present in the schema Digest fed to the LLM. The parser also validates bucket monotonicity and the column/role whitelist, and rejects PII columns marked `index`.
 
-## 2. Materialize a Layer-2 snapshot
+## Step 3 — Run it (zero Go)
 
-You produce a SQLite file with your `state_tables` (non-PII columns) plus, if you declared a pivot, the derived currencies table. Two paths:
+Materialize a Layer-2 snapshot (pick one), then run the agent, optionally run eval. Both runners derive everything from the schema — **no adapter code required**.
 
-### Path A — synthetic seed (what toygame uses; no database needed)
+### Materialize — real Postgres (`cmd/etl`, read-only)
 
-Reuse the framework's loaders. Sketch from [`examples/toygame/seed/seed.go`](../examples/toygame/seed/seed.go):
-
-```go
-import (
-    fetl "github.com/RuntianLee/schema-driven-insight-agent/etl"
-    "github.com/RuntianLee/schema-driven-insight-agent/schema_protocol"
-)
-
-func Seed(dbPath, schemaPath string) (int64, error) {
-    raw, _ := os.ReadFile(schemaPath)
-    s, _ := schema_protocol.Parse(raw)
-    cols, _ := fetl.BasicsColumns(s, "player_basics") // non-PII cols, sorted
-
-    var basics [][]any            // rows in `cols` order
-    var currencies []fetl.CurrencyRow
-    // ... generate deterministic synthetic rows ...
-
-    if err := fetl.LoadBasics(basics, cols, "player_basics", dbPath, []string{"level"}); err != nil {
-        return 0, err
-    }
-    // LoadCurrencies also stamps _meta.schema_version (the agent checks this on startup)
-    if err := fetl.LoadCurrencies(currencies, "player_currencies", dbPath, s.Version); err != nil {
-        return 0, err
-    }
-    return int64(len(basics)), nil
-}
+```bash
+go run github.com/RuntianLee/schema-driven-insight-agent/cmd/etl@v0.2.0 \
+  -schema ./my-adapter/schema.yaml -db-config ./config/db.yaml
 ```
 
-Then write an `etl_health.json` so the agent's startup gate passes — see [`examples/toygame/cmd/seed/main.go`](../examples/toygame/cmd/seed/main.go):
+`cmd/etl` connects **read-only** to production, de-identifies in the ETL (Layer 1) (`HashPID` hashes PII), derives currency columns/indexes/`data_as_of` from the schema, passes a row-count safety gate, and supports an optional declarative `scope` filter (add a top-level `scope:` block to scope to segments). The agent never sees Layer 0/1 — only the produced Layer-2 SQLite.
 
-```go
-import "github.com/RuntianLee/schema-driven-insight-agent/etl_health"
+### Materialize — synthetic data (`cmd/seed`, no database needed)
 
-etl_health.Write(healthPath, etl_health.Health{
-    Status:          etl_health.StatusOK,
-    Rows:            n,
-    FinishedAt:      time.Now(),
-    SchemaVersion:   1,
-    Frozen:          true,        // a frozen synthetic snapshot skips the staleness check
-    MinRowsOverride: &minRows,    // small example dataset → lower the readiness floor
-})
+```bash
+go run github.com/RuntianLee/schema-driven-insight-agent/cmd/seed@v0.2.0 \
+  -schema ./my-adapter/schema.yaml -spec ./my-adapter/seed.yaml
 ```
 
-### Path B — real Postgres ETL (read-only)
+`cmd/seed` generates a deterministic synthetic snapshot from a declarative `seed.yaml` (see "seed.yaml generator reference" below), mirroring `cmd/etl`'s readiness/health semantics. For dev/demo you can experience the full flow with no real DB.
 
-For a real dataset, your adapter connects to production **read-only** and de-identifies in the ETL (Layer 1). The `framework/etl` package has pgx-based helpers (`ExtractBasics`, `ExtractCurrencies`, `LoadBasics`, `LoadCurrencies`, `HashPID` for PII hashing) plus a row-count safety gate and an optional declarative `scope` filter (restrict to certain segments via a `scope:` block in `schema.yaml`). The agent never sees Layer 0/1 — only the resulting Layer-2 SQLite. Keep your real DSN in a gitignored config; never commit it.
+### Run the agent (`cmd/agent`, three envs)
 
-## 3. Run the agent
+The CLI (`cmd/agent`) reads these environment variables:
 
-The CLI (`cmd/agent`) reads these env vars (with example-relative defaults):
-
-| env | purpose |
+| env | Purpose |
 |---|---|
-| `SCHEMA_PATH` | path to your `schema.yaml` |
-| `SQLITE_PATH` | path to your Layer-2 `.db` |
-| `ETL_HEALTH_PATH` | path to your `etl_health.json` |
-| `TRAJECTORY_DB_PATH` | where run trajectories are recorded |
+| `SCHEMA_PATH` | Path to your `schema.yaml` |
+| `SQLITE_PATH` | Path to your Layer-2 `.db` |
+| `ETL_HEALTH_PATH` | Path to your `etl_health.json` |
+| `TRAJECTORY_DB_PATH` | Where run trajectories are persisted (optional) |
 
 ```bash
 SCHEMA_PATH=./my-adapter/schema.yaml \
 SQLITE_PATH=./my-adapter/data/my.db \
 ETL_HEALTH_PATH=./my-adapter/data/etl_health.json \
-go run ./cmd/agent -q "what does the coin balance distribution look like?"
+go run ./cmd/agent -q "What's the coin-balance distribution?"
 ```
 
-The agent: validates readiness → parses your schema into a Digest → routes `query_distribution` tool calls through the whitelisted SQL builder → narrates the distribution with proactive insight.
+Agent flow: verify readiness → parse your schema into a Digest → route the `query_distribution` tool call through the whitelisted SQL builder → narrate the distribution with proactive insight.
 
-## 4. (Optional) Eval tasks
+### Run eval (`cmd/eval`, optional gate)
 
-Declare benchmark tasks so CI can gate correctness. From [`examples/toygame/eval/tasks/coins_distribution.yaml`](../examples/toygame/eval/tasks/coins_distribution.yaml):
+```bash
+go run ./cmd/eval \
+  -schema ./my-adapter/schema.yaml \
+  -tasks ./my-adapter/eval/tasks \
+  -db ./my-adapter/data/my.db
+```
+
+## Eval tasks and inline fixtures
+
+Declare benchmark tasks so CI gates correctness. A task can either carry an inline `fixture:` (zero-code adapter, the task supplies its own data) or run against a shared DB (`-db`, the toygame quickstart shape).
 
 ```yaml
 id: coins_distribution
-title: "coin balance distribution"
-question: "what does the coin balance distribution look like?"
+title: "coin-balance distribution"
+question: "What's the coin-balance distribution?"
 llm_turns:
   - '{"tool":"query_distribution","args":{"table":"player_currencies","column":"balance","bucket_key":"coins_balance"}}'
-  - "Coins concentrate in the low tier: 60% of players hold ≤100."
+  - "Coins concentrate in the low range: 60% of players hold ≤100."
+fixture:                       # inline data: self-supplied, no external DB
+  tables:
+    player_currencies:
+      groups:
+        - {count: 600, values: {balance: 50}}
+        - {count: 300, values: {balance: 500}}
+        - {count: 80,  values: {balance: 5000}}
+        - {count: 20,  values: {balance: 50000}}
 evaluators:
-  data_correctness:           # deterministic — gate-able in CI
+  data_correctness:           # deterministic — decides the CI exit code
     tool: query_distribution
     expect_status: OK
     profile: {count: 1000}
     rows:
       - match: {bucket: "0~100"}
         expect: {player_count: 600}
-  reasoning_quality: {rubric: "...", min_score: 3}   # LLM-judge — report only
+  reasoning_quality: {rubric: "...", min_score: 3}   # LLM judge — report only
   insight_novelty:   {rubric: "...", min_score: 3}
 ```
 
-`data_correctness` compares the real tool output field-by-field against pinned values (a deterministic seed makes this exact). The LLM-judge evaluators score narration quality and run in report mode.
+Data-source resolution priority: **inline `fixture:` > Go-injected `FixtureFunc` > `-db` shared DB**. `data_correctness` compares the real tool output field-by-field against pinned values (determinism makes it exactly assertable), and it decides `cmd/eval`'s exit code (gate fail → exit 1, drop-in for CI). The LLM-judge evaluators (`reasoning_quality`/`insight_novelty`) score narrative quality in report mode.
 
-Run the suite with `cmd/eval` (exit code 1 when the gate fails — wire it straight into CI):
+The mock lane (default) needs no LLM key: the agent replays `llm_turns`, the judge uses a mock, and `data_correctness` is fully deterministic. For the real-LLM lane pass `-llm minimax -config config/llm.yaml`.
 
-```bash
-go run ./cmd/eval \
-  -schema examples/toygame/schema.yaml \
-  -tasks examples/toygame/eval/tasks \
-  -db examples/toygame/data/toygame.db
+## seed.yaml generator reference
+
+`seed.yaml` declares each table's row count and a generator for every **materialized column** (a materialized column with no generator is rejected). Pick exactly one of three generators:
+
+```yaml
+seed: 2026611          # optional; fixes the RNG seed → byte-reproducible per spec (built-in constant by default)
+as_of: 1700000000      # optional; last_seen columns may not exceed it, and the first row is pinned = as_of (exact MAX)
+tables:
+  player_basics:
+    rows: 1000
+    columns:
+      last_login: {const: 1700000000}            # const: same value on every row
+      coins:                                      # enum: weighted discrete values
+        enum:
+          - {value: 50,    weight: 600}
+          - {value: 500,   weight: 300}
+          - {value: 5000,  weight: 80}
+          - {value: 50000, weight: 20}
+      level:                                      # buckets: weighted ranges
+        buckets:
+          - {min: 1, max: 30}                     # uniform
+          - {min: 31, max: 60, weight: 2, skew: cube}    # skew: cube biases toward min (long tail)
+          - {min: 61, max: 99, skew: recent}             # skew: recent biases toward max (recency/retention shape)
 ```
 
-The mock lane (default) needs no LLM key: the agent replays `llm_turns` and the judge is mocked, so `data_correctness` is fully deterministic. Pass `-llm minimax -config config/llm.yaml` for the real-LLM lane.
+- **const**: same constant value on every row.
+- **enum**: weighted discrete values; weight defaults to 1.
+- **buckets**: weighted integer ranges (inclusive bounds); optional `skew` is `cube` (r³ biases toward min, long-tail approximation) or `recent` (1-(1-r)² biases toward max).
+- **Weighted quotas use the largest-remainder method for exact allocation**: per-bucket counts sum exactly to `rows`, no drift — this is why toygame's coins pin exactly to 600/300/80/20.
+- **Every materialized column needs a generator** (PII/omit columns aren't materialized, so they need none).
+- `seed` fixes the RNG → reproducible; `as_of` anchors `last_seen`.
+
+## etl_policy reference
+
+The `etl_policy` block (required by `cmd/etl`/`cmd/seed`) has six semantics:
+
+| Field | Meaning |
+|---|---|
+| `hash_salt` | PII hashing salt (used by `HashPID`). A plaintext salt, fit only for examples/synthetic. |
+| `hash_salt_env` | Read the salt from an env var; **takes precedence over `hash_salt` when set** (for production, salt stays out of the repo). |
+| `min_rows` | ETL row-count safety gate: fails if materialized rows fall below it (guards against an empty DB / half-finished extract). |
+| `health_min_rows` | Readiness row-count floor override written into health (small example dataset → lower it). |
+| `frozen` | `true` = a frozen synthetic/historical snapshot; the agent skips the staleness check at startup. |
+| `health_path` | `etl_health.json` output path override (relative to the schema dir; default = `etl_health.json` next to the db). |
 
 ## Checklist
 
-- [ ] `schema.yaml` with `state_tables` (mark PII!), optional pivot, and `glossary.buckets`.
-- [ ] A seed or ETL that writes the Layer-2 SQLite (reuse `etl.LoadBasics`/`LoadCurrencies`).
-- [ ] An `etl_health.json` so startup readiness passes.
-- [ ] Run `cmd/agent` with `SCHEMA_PATH`/`SQLITE_PATH`/`ETL_HEALTH_PATH` pointing at your adapter.
-- [ ] (Optional) eval tasks for a `data_correctness` gate.
+- [ ] `schema.yaml`: every TODO done (**including role/pii annotations**), with `state_tables`, optional pivot, `glossary.buckets`, `etl_policy`.
+- [ ] `cmd/etl` (real DB) or `cmd/seed` (synthetic) produces a Layer-2 SQLite **+ `etl_health.json`**.
+- [ ] Run `cmd/agent` with the three envs `SCHEMA_PATH`/`SQLITE_PATH`/`ETL_HEALTH_PATH` pointed at your adapter.
+- [ ] (Optional) eval tasks (inline `fixture:` or `-db` shared DB) for a `data_correctness` gate.
 
-That's the whole contract. Copy `examples/toygame`, swap the schema, point the agent at it.
+That's the whole contract. Zero Go.

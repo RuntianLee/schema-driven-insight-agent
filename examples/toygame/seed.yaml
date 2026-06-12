@@ -1,0 +1,15 @@
+# toygame 合成数据声明（cmd/seed 用）——分布与 eval 钉死值对齐：
+# coins 四档计数 600/300/80/20（任务 coins_distribution 断言 bucket 0~100 = 600）。
+as_of: 1700000000
+tables:
+  player_basics:
+    rows: 1000
+    columns:
+      coins:
+        enum:
+          - {value: 50,    weight: 600}   # 落 0~100 桶
+          - {value: 500,   weight: 300}   # 101~1k
+          - {value: 5000,  weight: 80}    # 1k~1w
+          - {value: 50000, weight: 20}    # 1w+
+      level:      {buckets: [{min: 1, max: 30}]}
+      last_login: {const: 1700000000}
