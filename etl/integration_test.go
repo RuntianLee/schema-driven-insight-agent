@@ -16,6 +16,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/RuntianLee/schema-driven-insight-agent/etl/introspect"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -80,6 +82,32 @@ func TestIntegration_RunAllEndToEnd(t *testing.T) {
 	db.QueryRow(`SELECT value FROM _meta WHERE key='data_as_of'`).Scan(&asOf)
 	if asOf != "1716000099" {
 		t.Errorf("data_as_of %s", asOf)
+	}
+}
+
+func TestIntegration_Introspect(t *testing.T) {
+	dsn := startPG(t)
+	ctx := context.Background()
+
+	infos, err := introspect.Introspect(ctx, dsn, []string{"player_basics"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].Name != "player_basics" {
+		t.Fatalf("tables: %+v", infos)
+	}
+	cols := infos[0].Columns
+	if len(cols) != 8 || cols[0].Name != "player_id" || !cols[0].IsPK {
+		t.Errorf("列序/PK: %+v", cols)
+	}
+	if cols[0].PGType != "bigint" || cols[1].PGType != "integer" {
+		t.Errorf("类型: %+v", cols[:2])
+	}
+
+	// 缺表错误分支：错误信息列出缺失表名。
+	if _, err := introspect.Introspect(ctx, dsn, []string{"player_basics", "ghost_table"}); err == nil ||
+		!strings.Contains(err.Error(), "ghost_table") {
+		t.Errorf("缺表应报错并列出表名: %v", err)
 	}
 }
 
