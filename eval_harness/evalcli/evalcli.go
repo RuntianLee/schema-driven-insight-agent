@@ -120,6 +120,11 @@ func Run(opts Options) (*evalpkg.Report, error) {
 				return nil, fmt.Errorf("seed %s: %w", task.ID, err)
 			}
 		case opts.SharedDBPath != "":
+			// 预检：sqlite 的 Open 是惰性的，路径打错会被默默建成空库，把「路径错」
+			// 变成下游「gate 失败」的迷雾。先 Stat 给出友好报错（恢复旧 cmd/eval 行为）。
+			if _, statErr := os.Stat(opts.SharedDBPath); statErr != nil {
+				return nil, fmt.Errorf("共享 db %s 不可用（先跑 seed/ETL）: %w", opts.SharedDBPath, statErr)
+			}
 			var err error
 			db, err = sql.Open("sqlite", opts.SharedDBPath)
 			if err != nil {

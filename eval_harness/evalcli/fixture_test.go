@@ -156,3 +156,37 @@ evaluators:
 	}
 }
 
+// TestRun_SharedDBPathMissing：-db 指向不存在路径时，应在 sql.Open 前 Stat 预检并
+// 友好报错（防 sqlite 惰性建空库把「路径打错」伪装成「gate 失败」）。
+func TestRun_SharedDBPathMissing(t *testing.T) {
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "schema.yaml")
+	os.WriteFile(schemaPath, []byte(fxSchema), 0o644)
+	tasksDir := filepath.Join(dir, "tasks")
+	os.MkdirAll(tasksDir, 0o755)
+	// 任务无 YAML/Go fixture → 走 SharedDBPath 兜底分支。
+	os.WriteFile(filepath.Join(tasksDir, "t1.yaml"), []byte(`
+id: t1
+title: "level 分布"
+question: "等级分布？"
+llm_turns:
+  - '{"tool":"query_distribution","args":{"table":"player_basics","column":"level"}}'
+  - "等级集中在 50。"
+evaluators:
+  data_correctness:
+    tool: query_distribution
+    expect_status: OK
+    profile: {count: 1}
+    rows: []
+`), 0o644)
+
+	missing := filepath.Join(dir, "does-not-exist.db")
+	_, err := Run(Options{Adapter: "t", SchemaPath: schemaPath, TasksDir: tasksDir, SharedDBPath: missing})
+	if err == nil {
+		t.Fatal("共享 db 路径不存在时应报错")
+	}
+	if !strings.Contains(err.Error(), "不可用") && !strings.Contains(err.Error(), missing) {
+		t.Errorf("报错应含「不可用」或路径，实际: %v", err)
+	}
+}
+
