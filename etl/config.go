@@ -132,5 +132,5 @@ func ResolveDSNFromConfig(cfgPath, dsnEnv string) (dsn, summary string, err erro
 			return v, fmt.Sprintf("(%s env)", dsnEnv), nil
 		}
 	}
-	return "", "", fmt.Errorf("PG 未配置：创建 %s（参考 db-config.example.yaml）或设置 %s", cfgPath, dsnEnv)
+	return "", "", fmt.Errorf("PG 未配置：创建 %s（YAML 字段：host/port/user/dbname/sslmode/password_env）或设置环境变量 %s", cfgPath, dsnEnv)
 }
