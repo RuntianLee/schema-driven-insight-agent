@@ -20,6 +20,7 @@ type Task struct {
 	Question   string               `yaml:"question"`
 	LLMTurns   []string             `yaml:"llm_turns"`
 	Evaluators map[string]yaml.Node `yaml:"evaluators"`
+	Fixture    yaml.Node            `yaml:"fixture"` // 可选内联 fixture（evalcli 解码；零值=未声明）
 }
 
 // LoadDir 读 dir 下所有 *.yaml，按文件名排序解析（确定性），校验 id 非空。
