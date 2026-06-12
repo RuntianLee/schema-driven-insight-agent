@@ -50,10 +50,12 @@ flowchart TB
         AG["eino_agent.Runner<br/>+ query_distribution tool<br/>+ LLM (MiniMax / mock)"]
     end
     subgraph CORE["framework core (this repo · zero business hardcode)"]
-        SP["schema_protocol<br/>parses schema.yaml → Digest + SQL builder"]
-        ETL["etl / etl_health<br/>materialize + readiness gate"]
+        SP["schema_protocol<br/>parses schema.yaml → Digest + SQL builder<br/>(rejects role/pii TODO placeholders)"]
+        ETL["cmd/etl + cmd/seed<br/>materialize Layer 2 — assembly fully derived from schema.yaml"]
+        INIT["cmd/init<br/>scaffold a draft schema from live Postgres"]
+        HE["etl_health<br/>startup readiness gate"]
         TR["trajectory<br/>every run recorded (PII redacted on write)"]
-        EV["eval_harness<br/>data_correctness gate + LLM-judge"]
+        EV["eval_harness / cmd/eval<br/>data_correctness gate + LLM-judge"]
     end
     subgraph L2["Layer 2 · local SQLite (shareable)"]
         DB[("your_adapter.db<br/>de-identified snapshot")]
@@ -62,8 +64,11 @@ flowchart TB
         PG[("your production DB")]
     end
 
-    PG -->|"adapter ETL (de-identify in Layer 1)"| DB
+    PG -->|"introspect (read-only)"| INIT
+    PG -->|"extract + de-identify in Layer 1 (read-only GUC)"| ETL
+    ETL -->|"full-replace tx + health"| DB
     DB -->|"parameterized SQL (read-only)"| AG
+    HE -.->|"refuse to start if not ready"| AG
     AG --- SP
     AG --> TR
     AG --> EV
@@ -75,15 +80,15 @@ flowchart TB
     class PG prod;
     class DB safe;
     class AG agent;
-    class SP,ETL,TR,EV core;
+    class SP,ETL,INIT,HE,TR,EV core;
 ```
 
-**Read it:** the agent only reaches the green "shareable" SQLite layer. De-identification happens in the adapter's ETL (Layer 1), so Layer 2 is compliant-by-construction. The framework builds every SQL string from the schema with a column/operator whitelist — the LLM never emits SQL.
+**Read it:** the agent only reaches the green "shareable" SQLite layer. De-identification happens inside the generic `cmd/etl` (Layer 1) whose entire assembly — columns, currency pivot, indexes, salt, row gates — is derived from your `schema.yaml`, so Layer 2 is compliant-by-construction and there is no adapter code to audit. The framework builds every SQL string from the schema with a column/operator whitelist — the LLM never emits SQL.
 
 ## How it works
 
-1. **Write a `schema.yaml`** declaring your `state_tables` (columns, `role`, `pii`, `omit_in_layer2`), `glossary.buckets` (distribution segments), and an `etl_policy` block.
-2. **Materialize a Layer-2 SQLite snapshot with zero Go** — point `cmd/etl` at a real Postgres (read-only pgx introspection) or `cmd/seed` at a declarative `seed.yaml` (synthetic data, see `examples/toygame`). No adapter code to write.
+1. **Write a `schema.yaml`** declaring your `state_tables` (columns, `role`, `pii`, `omit_in_layer2`), `glossary.buckets` (distribution segments), and an `etl_policy` block — or let **`cmd/init`** introspect your Postgres and generate a draft (it leaves `role`/`pii` as TODO placeholders that the parser refuses to run until you annotate them: forgetting to mark PII is mechanically impossible).
+2. **Materialize a Layer-2 SQLite snapshot with zero Go** — point `cmd/etl` at a real Postgres (read-only extraction, de-identified in flight) or `cmd/seed` at a declarative `seed.yaml` (synthetic data, see `examples/toygame`). No adapter code to write.
 3. **Run the agent** against that snapshot. It parses your schema into a "Digest" (what the LLM is told it can ask), routes tool calls through the whitelisted SQL builder, and narrates the result.
 
 The repo ships a complete, runnable example: [`examples/toygame`](examples/toygame) — a fictional idle game with synthetic data. Use it as the template for your own adapter.
@@ -106,19 +111,25 @@ What the framework guarantees, and where the trust boundary sits:
 ## Repository layout
 
 ```
-schema_protocol/   schema.yaml parser + Digest + whitelisted SQL builder
+schema_protocol/   schema.yaml parser (etl_policy / index / TODO safety gate) + Digest + whitelisted SQL builder
 tools/             query_distribution tool (the agent's only data tool)
 eino_agent/        agent runner (LLM tool-calling loop)
 agent/             agent contract (interfaces; engine-agnostic)
 contract/          response types (distribution rows, profile)
-etl/ etl_health/   generic ETL helpers + startup readiness gate
+etl/               generic ETL: schema-derived assembly (derive), orchestration (RunAll)
+etl/seedgen/       declarative synthetic data generator (seed.yaml → deterministic snapshot)
+etl/introspect/    Postgres introspection + adapter-draft rendering (cmd/init core)
+etl_health/        startup readiness gate (min_rows / frozen / data_as_of)
 trajectory/        run recording (PII redacted on write)
-eval_harness/      eval engine: data_correctness + LLM-judge evaluators
+eval_harness/      eval engine: data_correctness + LLM-judge evaluators; evalcli shared assembly + inline YAML fixtures
 llm/               LLM client resolution (MiniMax; mock fallback)
 prompts/           methodology system prompt (no business data)
+cmd/init/          scaffold a new adapter from a live Postgres (draft with TODO placeholders)
+cmd/etl/           generic ETL runner — everything derived from schema.yaml, no adapter code
+cmd/seed/          synthetic Layer-2 snapshot from a declarative seed.yaml (no database needed)
 cmd/agent/         the CLI entry point (REPL + single-shot)
 cmd/eval/          eval suite runner (deterministic CI gate; exit 1 on gate failure)
-examples/toygame/  runnable synthetic example adapter (start here)
+examples/toygame/  runnable synthetic example adapter — YAML only, zero Go (start here)
 ```
 
 ## Status

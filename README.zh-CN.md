@@ -50,10 +50,12 @@ flowchart TB
         AG["eino_agent.Runner<br/>+ query_distribution 工具<br/>+ LLM（MiniMax / mock）"]
     end
     subgraph CORE["framework 核心（本仓库 · 零业务硬编码）"]
-        SP["schema_protocol<br/>解析 schema.yaml → Digest + SQL 构造器"]
-        ETL["etl / etl_health<br/>物化 + 就绪门控"]
+        SP["schema_protocol<br/>解析 schema.yaml → Digest + SQL 构造器<br/>（拒绝 role/pii TODO 占位）"]
+        ETL["cmd/etl + cmd/seed<br/>物化 Layer 2——装配全部由 schema.yaml 推导"]
+        INIT["cmd/init<br/>从真 Postgres 内省生成 schema 草稿"]
+        HE["etl_health<br/>启动就绪门控"]
         TR["trajectory<br/>每次运行落库（写入侧 PII 脱敏）"]
-        EV["eval_harness<br/>data_correctness 门 + LLM 评判"]
+        EV["eval_harness / cmd/eval<br/>data_correctness 门 + LLM 评判"]
     end
     subgraph L2["第 2 层 · 本机 SQLite（可泄露级）"]
         DB[("your_adapter.db<br/>脱敏快照")]
@@ -62,8 +64,11 @@ flowchart TB
         PG[("你的生产数据库")]
     end
 
-    PG -->|"adapter ETL（在第 1 层脱敏）"| DB
+    PG -->|"内省（只读）"| INIT
+    PG -->|"抽取 + 第 1 层脱敏（只读 GUC）"| ETL
+    ETL -->|"tx 全量替换 + health"| DB
     DB -->|"参数化 SQL（只读）"| AG
+    HE -.->|"未就绪拒绝启动"| AG
     AG --- SP
     AG --> TR
     AG --> EV
@@ -75,15 +80,15 @@ flowchart TB
     class PG prod;
     class DB safe;
     class AG agent;
-    class SP,ETL,TR,EV core;
+    class SP,ETL,INIT,HE,TR,EV core;
 ```
 
-**读图**：Agent 只能触及绿色的「可泄露级」SQLite 层。脱敏发生在 adapter 的 ETL（第 1 层），所以第 2 层天然合规。框架从 schema 构造每一条 SQL（列/运算符白名单）——LLM 从不产出 SQL。
+**读图**：Agent 只能触及绿色的「可泄露级」SQLite 层。脱敏发生在通用 `cmd/etl` 内部（第 1 层）——其全部装配（列集、货币 pivot、索引、盐、行数闸门）由你的 `schema.yaml` 推导，所以第 2 层天然合规，且没有任何 adapter 代码需要审计。框架从 schema 构造每一条 SQL（列/运算符白名单）——LLM 从不产出 SQL。
 
 ## 工作原理
 
-1. **写一份 `schema.yaml`**，声明你的 `state_tables`（列、`role`、`pii`、`omit_in_layer2`）、`glossary.buckets`（分布分段）和一个 `etl_policy` 块。
-2. **零 Go 物化一份 Layer-2 SQLite 快照**——用 `cmd/etl` 对准真 Postgres（只读 pgx 内省），或用 `cmd/seed` 对准声明式 `seed.yaml`（合成数据，见 `examples/toygame`）。无需写任何 adapter 代码。
+1. **写一份 `schema.yaml`**，声明你的 `state_tables`（列、`role`、`pii`、`omit_in_layer2`）、`glossary.buckets`（分布分段）和一个 `etl_policy` 块——或让 **`cmd/init`** 内省你的 Postgres 自动生成草稿（role/pii 留 TODO 占位，解析器在你完成标注前拒绝运行：「忘标 PII」在机制上不可能）。
+2. **零 Go 物化一份 Layer-2 SQLite 快照**——用 `cmd/etl` 对准真 Postgres（只读抽取、在途脱敏），或用 `cmd/seed` 对准声明式 `seed.yaml`（合成数据，见 `examples/toygame`）。无需写任何 adapter 代码。
 3. **跑 Agent**，对着这份快照提问。它把你的 schema 解析成「Digest」（告诉 LLM 能问什么），把工具调用经白名单 SQL 构造器路由，再叙述结果。
 
 仓库自带一个完整、可跑的示例：[`examples/toygame`](examples/toygame) —— 一个用合成数据的虚构挂机游戏。把它当作你自己 adapter 的模板。
@@ -95,19 +100,25 @@ flowchart TB
 ## 仓库结构
 
 ```
-schema_protocol/   schema.yaml 解析器 + Digest + 白名单 SQL 构造器
+schema_protocol/   schema.yaml 解析器（etl_policy / index / TODO 安全闸）+ Digest + 白名单 SQL 构造器
 tools/             query_distribution 工具（Agent 唯一的数据工具）
 eino_agent/        Agent runner（LLM tool-calling 循环）
 agent/             Agent 契约（接口；与引擎无关）
 contract/          响应类型（分布行、profile）
-etl/ etl_health/   通用 ETL 辅助 + 启动就绪门控
+etl/               通用 ETL：schema 推导装配（derive）+ 编排（RunAll）
+etl/seedgen/       声明式合成数据生成器（seed.yaml → 确定性快照）
+etl/introspect/    Postgres 内省 + 接入草稿渲染（cmd/init 核心）
+etl_health/        启动就绪门控（min_rows / frozen / data_as_of）
 trajectory/        运行记录（写入侧 PII 脱敏）
-eval_harness/      评测引擎：data_correctness + LLM-judge 评测器
+eval_harness/      评测引擎：data_correctness + LLM-judge；evalcli 共享装配 + 任务内联 fixture
 llm/               LLM 客户端解析（MiniMax；mock 回退）
 prompts/           方法论 system prompt（不含业务数据）
+cmd/init/          从真 Postgres 内省生成 adapter 草稿（TODO 占位）
+cmd/etl/           通用 ETL runner——装配全部由 schema.yaml 推导，零 adapter 代码
+cmd/seed/          按声明式 seed.yaml 生成合成 Layer-2 快照（无需数据库）
 cmd/agent/         CLI 入口（REPL + 单发）
 cmd/eval/          eval 任务集运行器（确定性 CI gate；gate 失败退出码 1）
-examples/toygame/  可跑的合成示例 adapter（从这里开始）
+examples/toygame/  可跑的合成示例 adapter——纯 YAML、零 Go（从这里开始）
 ```
 
 ## 安全模型
