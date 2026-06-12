@@ -3,11 +3,11 @@
 ## Development
 
 ```bash
-go build ./... && go vet ./... && go test -race ./...   # root module
-cd examples/toygame && go build ./... && go test ./...  # example module (replace ../..)
+go build ./... && go vet ./... && go test -race ./...      # root module (the only module — examples/toygame is YAML-only since v0.2.0)
+go test -tags=integration ./etl/ -v                        # integration tests (needs Docker; testcontainers Postgres)
 ```
 
-CI runs the same, plus a deterministic eval gate (`cmd/eval` against the toygame fixture).
+CI runs the same, plus a deterministic toygame smoke + eval gate (`cmd/seed` → `cmd/eval`, zero-code path) and a separate `integration` job.
 
 ## Release convention
 
