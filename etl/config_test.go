@@ -1,6 +1,8 @@
 package etl
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -278,5 +280,41 @@ func TestDSN_PasswordEnvNamedButUnset_Error(t *testing.T) {
 	cfg := PGConfig{Host: "h", User: "u", DBName: "d", PasswordEnv: "B3_PG_PASSWORD_DEFINITELY_UNSET_X9Z"}
 	if _, err := cfg.DSN(); err == nil {
 		t.Fatal("expected error when password_env names an unset/empty var")
+	}
+}
+
+// --- ResolveDSNFromConfig tests ---
+
+func TestResolveDSNFromConfig(t *testing.T) {
+	// 1) config 文件存在 → 严格解析 + DSN()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "db.yaml")
+	os.WriteFile(cfgPath, []byte("host: h\nuser: u\ndbname: d\npassword: p\n"), 0o644)
+	dsn, summary, err := ResolveDSNFromConfig(cfgPath, "X_PG_DSN")
+	if err != nil || dsn == "" {
+		t.Fatalf("config 道失败: %v", err)
+	}
+	if strings.Contains(summary, "password") {
+		t.Errorf("summary 不可含密码字段: %q", summary)
+	}
+
+	// 2) config 缺失 + env 兜底
+	t.Setenv("X_PG_DSN", "postgres://e")
+	dsn, _, err = ResolveDSNFromConfig(filepath.Join(dir, "nope.yaml"), "X_PG_DSN")
+	if err != nil || dsn != "postgres://e" {
+		t.Fatalf("env 兜底失败: %q, %v", dsn, err)
+	}
+
+	// 3) 都没有 → 错误带指引
+	t.Setenv("X_PG_DSN", "")
+	if _, _, err := ResolveDSNFromConfig(filepath.Join(dir, "nope.yaml"), "X_PG_DSN"); err == nil {
+		t.Error("无配置应报错")
+	}
+
+	// 4) config 存在但损坏 → 硬失败（不静默回退 env）
+	os.WriteFile(cfgPath, []byte("host: [broken\n"), 0o644)
+	t.Setenv("X_PG_DSN", "postgres://e")
+	if _, _, err := ResolveDSNFromConfig(cfgPath, "X_PG_DSN"); err == nil {
+		t.Error("损坏 config 应硬失败")
 	}
 }
