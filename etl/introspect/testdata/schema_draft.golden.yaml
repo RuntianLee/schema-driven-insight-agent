@@ -1,0 +1,29 @@
+# schema.yaml 草稿 —— 由 cmd/init 内省生成。
+# 必须完成所有 TODO（role / pii）后才能使用：解析器会拒绝 TODO 占位。
+# role 白名单示例：actor_id / dimension / level / balance / last_seen /
+#   last_login / created_at / power / stage_progress / exp …（见 ADAPTER_GUIDE）
+# 涉及个人身份的列（ID/昵称/邮箱/设备号…）必须标 pii: true。
+version: 1
+domain: my_game
+
+data_sources:
+  game_db: {type: postgres, dsn_env: MY_PG_DSN, access: read_only}
+  layer2:  {type: sqlite, path: ./data/my_game.db}
+
+etl_policy:
+  hash_salt: my_game_v0   # TODO: 项目专属盐（或改用 hash_salt_env）
+  min_rows: 1          # TODO: 行数安全闸门（约为预期行数的 50%）
+
+state_tables:
+  player_basics:
+    nature: snapshot
+    primary_key: [player_id]
+    fields:
+      player_id: {type: int64, role: TODO, pii: TODO, pk: true}
+      server_id: {type: int32, role: TODO, pii: TODO}
+      name: {type: string, role: TODO, pii: TODO}
+      coins: {type: int64, role: TODO, pii: TODO}
+      last_online_time: {type: int64, role: TODO, pii: TODO}
+      # 不支持的类型（未纳入，需手工处理或忽略）: player_attr (jsonb)
+
+# TODO（可选）: derived_tables（货币 pivot）、glossary（术语/buckets）、scope（范围过滤）
