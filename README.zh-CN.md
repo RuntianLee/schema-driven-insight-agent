@@ -22,14 +22,20 @@
 
 ```bash
 git clone https://github.com/RuntianLee/schema-driven-insight-agent
-cd schema-driven-insight-agent/examples/toygame
+cd schema-driven-insight-agent
 
-# 1. 生成一份合成 Layer-2 快照（1000 个假玩家，纯 Go，无需 PG）
-go run ./cmd/seed
+# 1. 生成一份合成 Layer-2 快照（1000 个假玩家，声明式，零 Go、无需 PG）
+go run ./cmd/seed -schema examples/toygame/schema.yaml -spec examples/toygame/seed.yaml
 
-# 2. 向 Agent 提问（从仓库根目录跑，默认路径才能命中）
-cd .. && cd ..
+# 2. 向 Agent 提问
+SCHEMA_PATH=examples/toygame/schema.yaml \
+SQLITE_PATH=examples/toygame/data/toygame.db \
+ETL_HEALTH_PATH=examples/toygame/data/etl_health.json \
 go run ./cmd/agent -q "玩家的金币余额分布是怎样的？"
+
+# 3. 跑确定性 eval 闸门（无需 API key）
+go run ./cmd/eval -schema examples/toygame/schema.yaml \
+  -tasks examples/toygame/eval/tasks -db examples/toygame/data/toygame.db
 ```
 
 未设置 `MINIMAX_API_KEY` 时，回答会回退到无状态 **mock 占位**——工具/SQL 路径仍在真实合成数据上执行，但 mock 回复不会渲染它。配置一个 provider key（见 `config/llm.example.yaml`）即可在回答里得到真实的**分布表格**和主动洞察。
@@ -76,8 +82,8 @@ flowchart TB
 
 ## 工作原理
 
-1. **写一份 `schema.yaml`**，声明你的 `state_tables`（列、`role`、`pii`、`omit_in_layer2`）和 `glossary.buckets`（分布分段）。
-2. **写一个薄 adapter**，把数据物化成一份 Layer-2 SQLite 快照——要么真 Postgres ETL（`framework/etl` 有只读 pgx 辅助），要么合成 seed（见 `examples/toygame`）。通常**不到 200 行**。
+1. **写一份 `schema.yaml`**，声明你的 `state_tables`（列、`role`、`pii`、`omit_in_layer2`）、`glossary.buckets`（分布分段）和一个 `etl_policy` 块。
+2. **零 Go 物化一份 Layer-2 SQLite 快照**——用 `cmd/etl` 对准真 Postgres（只读 pgx 内省），或用 `cmd/seed` 对准声明式 `seed.yaml`（合成数据，见 `examples/toygame`）。无需写任何 adapter 代码。
 3. **跑 Agent**，对着这份快照提问。它把你的 schema 解析成「Digest」（告诉 LLM 能问什么），把工具调用经白名单 SQL 构造器路由，再叙述结果。
 
 仓库自带一个完整、可跑的示例：[`examples/toygame`](examples/toygame) —— 一个用合成数据的虚构挂机游戏。把它当作你自己 adapter 的模板。

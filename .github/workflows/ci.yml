@@ -11,7 +11,6 @@ jobs:
           go-version: '1.26'
           cache-dependency-path: |
             go.sum
-            examples/toygame/go.sum
 
       # framework (root module) — self-contained
       - name: build/vet/test framework
@@ -20,18 +19,9 @@ jobs:
           go vet ./...
           go test -race ./...
 
-      # toygame example — separate module, resolves framework via a replace directive
-      - name: build/vet/test toygame example
-        working-directory: examples/toygame
+      - name: toygame smoke (cmd/seed, zero-code)
         run: |
-          go build ./...
-          go vet ./...
-          go test -race ./...
-
-      - name: toygame smoke (seed)
-        working-directory: examples/toygame
-        run: |
-          go run ./cmd/seed
+          go run ./cmd/seed -schema examples/toygame/schema.yaml -spec examples/toygame/seed.yaml
           echo "toygame seeded OK"
 
       # deterministic eval gate — mock lane, no LLM key needed
@@ -41,3 +31,13 @@ jobs:
             -schema examples/toygame/schema.yaml \
             -tasks examples/toygame/eval/tasks \
             -db examples/toygame/data/toygame.db
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      - name: integration tests (testcontainers)
+        run: go test -tags=integration ./etl/ -v
