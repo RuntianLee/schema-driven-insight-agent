@@ -1,6 +1,8 @@
 package evalcli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -114,6 +116,43 @@ fixture:
 	if _, err := buildFixtureDB(s, node, t.TempDir()); err == nil ||
 		!strings.Contains(err.Error(), "count") {
 		t.Error("count<=0 应报错")
+	}
+}
+
+func TestRun_YAMLFixtureEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "schema.yaml")
+	os.WriteFile(schemaPath, []byte(fxSchema), 0o644)
+	tasksDir := filepath.Join(dir, "tasks")
+	os.MkdirAll(tasksDir, 0o755)
+	os.WriteFile(filepath.Join(tasksDir, "t1.yaml"), []byte(`
+id: t1
+title: "level 分布"
+question: "等级分布？"
+llm_turns:
+  - '{"tool":"query_distribution","args":{"table":"player_basics","column":"level"}}'
+  - "等级集中在 50。"
+fixture:
+  tables:
+    player_basics:
+      groups:
+        - {count: 120, values: {server_id: 1, level: 50, last_online_time: 1716000000}}
+evaluators:
+  data_correctness:
+    tool: query_distribution
+    expect_status: OK
+    profile: {count: 120}
+    rows:
+      - match: {bucket: "50"}
+        expect: {player_count: 120}
+`), 0o644)
+
+	rep, err := Run(Options{Adapter: "t", SchemaPath: schemaPath, TasksDir: tasksDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.GateFailed() {
+		t.Error("YAML fixture 任务 gate 应通过")
 	}
 }
 

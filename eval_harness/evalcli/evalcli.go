@@ -35,17 +35,18 @@ type FixtureFunc func(dir string) (*sql.DB, error)
 
 // Options 装配一次 eval 运行的全部输入。
 type Options struct {
-	Adapter    string                 // adapter 名（history meta + 临时目录前缀）
-	SchemaPath string                 // schema.yaml 路径
-	TasksDir   string                 // 任务 YAML 目录
-	Fixtures   map[string]FixtureFunc // 任务 ID → fixture seeder（缺映射 loud-fail）
-	OnlyTask   string                 // 只跑指定任务 ID；空跑全部
-	UseRealLLM bool                   // true → ResolveStrict 真道（agent+judge 共用）
-	ConfigPath string                 // 真道 LLM provider YAML
-	OutDir     string                 // 报告落盘目录；空则不落盘
-	TrajDBPath string                 // trajectory 落库路径；空串不落库
-	HistoryOut string                 // PII-free verdict JSONL 追加路径；空则不写
-	Commit     string                 // history 行的 commit SHA
+	Adapter      string                 // adapter 名（history meta + 临时目录前缀）
+	SchemaPath   string                 // schema.yaml 路径
+	TasksDir     string                 // 任务 YAML 目录
+	Fixtures     map[string]FixtureFunc // 任务 ID → Go fixture seeder（逃生舱；YAML fixture 优先）
+	SharedDBPath string                 // 共享 Layer2 db（YAML/Go fixture 都没有时的兜底；cmd/eval -db）
+	OnlyTask     string                 // 只跑指定任务 ID；空跑全部
+	UseRealLLM   bool                   // true → ResolveStrict 真道（agent+judge 共用）
+	ConfigPath   string                 // 真道 LLM provider YAML
+	OutDir       string                 // 报告落盘目录；空则不落盘
+	TrajDBPath   string                 // trajectory 落库路径；空串不落库
+	HistoryOut   string                 // PII-free verdict JSONL 追加路径；空则不写
+	Commit       string                 // history 行的 commit SHA
 }
 
 // Run 逐任务 seed fixture → RunSuite → 合并报告。
@@ -91,18 +92,41 @@ func Run(opts Options) (*evalpkg.Report, error) {
 		if opts.OnlyTask != "" && task.ID != opts.OnlyTask {
 			continue
 		}
-		seed, ok := opts.Fixtures[task.ID]
-		if !ok {
-			return nil, fmt.Errorf("任务 %s 无 fixture 映射", task.ID)
-		}
-		dir, err := os.MkdirTemp("", opts.Adapter+"eval-")
-		if err != nil {
-			return nil, fmt.Errorf("mktemp: %w", err)
-		}
-		defer os.RemoveAll(dir) // defer 到 Run 返回统一清理（任务数少，error path 也保证清理）
-		db, err := seed(dir)
-		if err != nil {
-			return nil, fmt.Errorf("seed %s: %w", task.ID, err)
+		// fixture 三级解析：YAML fixture > Go FixtureFunc > -db 共享库（都没有→loud-fail）。
+		var db *sql.DB
+		goSeed, hasGo := opts.Fixtures[task.ID]
+		switch {
+		case !task.Fixture.IsZero():
+			if hasGo {
+				fmt.Fprintf(os.Stderr, "warn: 任务 %s 同时声明 YAML fixture 与 Go fixture，YAML 优先\n", task.ID)
+			}
+			dir, err := os.MkdirTemp("", opts.Adapter+"eval-")
+			if err != nil {
+				return nil, fmt.Errorf("mktemp: %w", err)
+			}
+			defer os.RemoveAll(dir)
+			db, err = buildFixtureDB(schema, task.Fixture, dir)
+			if err != nil {
+				return nil, fmt.Errorf("fixture %s: %w", task.ID, err)
+			}
+		case hasGo:
+			dir, err := os.MkdirTemp("", opts.Adapter+"eval-")
+			if err != nil {
+				return nil, fmt.Errorf("mktemp: %w", err)
+			}
+			defer os.RemoveAll(dir)
+			db, err = goSeed(dir)
+			if err != nil {
+				return nil, fmt.Errorf("seed %s: %w", task.ID, err)
+			}
+		case opts.SharedDBPath != "":
+			var err error
+			db, err = sql.Open("sqlite", opts.SharedDBPath)
+			if err != nil {
+				return nil, fmt.Errorf("open shared db %s: %w", opts.SharedDBPath, err)
+			}
+		default:
+			return nil, fmt.Errorf("任务 %s 无 fixture（YAML fixture / Go fixture / -db 三选一）", task.ID)
 		}
 
 		distTool := tools.NewDistributionTool(schema, db)
