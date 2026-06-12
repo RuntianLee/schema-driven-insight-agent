@@ -221,7 +221,7 @@ tables:
 
 ## etl_policy reference
 
-The `etl_policy` block (required by `cmd/etl`/`cmd/seed`) has five semantics:
+The `etl_policy` block (required by `cmd/etl`/`cmd/seed`) has six semantics:
 
 | Field | Meaning |
 |---|---|

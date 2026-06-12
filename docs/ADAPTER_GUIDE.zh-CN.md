@@ -221,7 +221,7 @@ tables:
 
 ## etl_policy 参考
 
-`etl_policy` 块（`cmd/etl`/`cmd/seed` 必需）五项语义：
+`etl_policy` 块（`cmd/etl`/`cmd/seed` 必需）六项语义：
 
 | 字段 | 含义 |
 |---|---|
