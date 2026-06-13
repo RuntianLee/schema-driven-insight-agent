@@ -2,6 +2,7 @@ package csvload
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,9 @@ type RunOptions struct {
 // → pivot 货币列（actor_id 经 HashPID 脱敏）→ LoadCurrencies → health。
 // 镜像 etl.RunAll / seedgen.Run 的顺序与 health 语义。
 // v0.3 约束：恰好 1 个 state 表 ↔ 1 份 CSV；恰好 1 个 pivot_money_columns 派生表。
+// 注意：① 整份 CSV 读入内存（适配本地示例/导出报表量级，非海量流式）；
+// ② health.Rows = pivot 行数（records × 货币列数），与 PG 路径一致——
+// 多货币列时 health_min_rows 阈值应按此口径设置。
 func Run(o RunOptions) error {
 	rawSchema, err := os.ReadFile(o.SchemaPath)
 	if err != nil {
@@ -112,6 +116,10 @@ func Run(o RunOptions) error {
 		if err := etl.WriteDataAsOf(sqlitePath, asOf); err != nil {
 			return err
 		}
+	} else if s.ETLPolicy.Frozen {
+		// 冻结快照却无时间锚（无 last_seen role 且未设 etl_policy.data_as_of）——
+		// 几乎必是误配：agent 失鲜逻辑与运营问题的绝对 cutoff 都将缺基准。
+		log.Printf("warn: 冻结快照无 data_as_of（无 last_seen role 且 etl_policy.data_as_of 未设）；建议在 schema 显式声明 data_as_of")
 	}
 
 	var pivots []string
