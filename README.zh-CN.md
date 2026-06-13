@@ -24,21 +24,24 @@
 git clone https://github.com/RuntianLee/schema-driven-insight-agent
 cd schema-driven-insight-agent
 
-# 1. 生成一份合成 Layer-2 快照（1000 个假玩家，声明式，零 Go、无需 PG）
-go run ./cmd/seed -schema examples/toygame/schema.yaml -spec examples/toygame/seed.yaml
+# 1. Build a de-identified Layer-2 snapshot from a real CC0 CSV (zero Go, no PG).
+#    CustomerId is hashed and Surname dropped — all derived from schema.yaml.
+go run ./cmd/csv -schema examples/bankchurn/schema.yaml
 
-# 2. 向 Agent 提问
-SCHEMA_PATH=examples/toygame/schema.yaml \
-SQLITE_PATH=examples/toygame/data/toygame.db \
-ETL_HEALTH_PATH=examples/toygame/data/etl_health.json \
-go run ./cmd/agent -q "玩家的金币余额分布是怎样的？"
+# 2. Ask the agent a question
+SCHEMA_PATH=examples/bankchurn/schema.yaml \
+SQLITE_PATH=examples/bankchurn/data/churn.db \
+ETL_HEALTH_PATH=examples/bankchurn/data/etl_health.json \
+go run ./cmd/agent -q "银行客户的账户余额分布是怎样的？"
 
-# 3. 跑确定性 eval 闸门（无需 API key）
-go run ./cmd/eval -schema examples/toygame/schema.yaml \
-  -tasks examples/toygame/eval/tasks -db examples/toygame/data/toygame.db
+# 3. Run the deterministic eval gate (no API key needed)
+go run ./cmd/eval -schema examples/bankchurn/schema.yaml \
+  -tasks examples/bankchurn/eval/tasks -db examples/bankchurn/data/churn.db
 ```
 
-未设置 `MINIMAX_API_KEY` 时，回答会回退到无状态 **mock 占位**——工具/SQL 路径仍在真实合成数据上执行，但 mock 回复不会渲染它。配置一个 provider key（见 `config/llm.example.yaml`）即可在回答里得到真实的**分布表格**和主动洞察。
+`examples/bankchurn` 是一个**真实**公开数据集（Kaggle 银行客户流失，CC0，10k 行），**零 Go** 即可接入——仅需 `schema.yaml`。如果偏好合成数据，或手头暂无 CSV，`examples/toygame` 演示了声明式 `cmd/seed` 路径：`go run ./cmd/seed -schema examples/toygame/schema.yaml -spec examples/toygame/seed.yaml`。
+
+未设置 `MINIMAX_API_KEY` 时，回答会回退到无状态 **mock 占位**——工具/SQL 路径仍在真实数据上执行，但 mock 回复不会渲染它。配置一个 provider key（见 `config/llm.example.yaml`）即可在回答里得到真实的**分布表格**和主动洞察。
 
 ## 架构
 
@@ -51,7 +54,7 @@ flowchart TB
     end
     subgraph CORE["framework 核心（本仓库 · 零业务硬编码）"]
         SP["schema_protocol<br/>解析 schema.yaml → Digest + SQL 构造器<br/>（拒绝 role/pii TODO 占位）"]
-        ETL["cmd/etl + cmd/seed<br/>物化 Layer 2——装配全部由 schema.yaml 推导"]
+        ETL["cmd/etl + cmd/csv + cmd/seed<br/>物化 Layer 2——装配全部由 schema.yaml 推导"]
         INIT["cmd/init<br/>从真 Postgres 内省生成 schema 草稿"]
         HE["etl_health<br/>启动就绪门控"]
         TR["trajectory<br/>每次运行落库（写入侧 PII 脱敏）"]
@@ -88,10 +91,10 @@ flowchart TB
 ## 工作原理
 
 1. **写一份 `schema.yaml`**，声明你的 `state_tables`（列、`role`、`pii`、`omit_in_layer2`）、`glossary.buckets`（分布分段）和一个 `etl_policy` 块——或让 **`cmd/init`** 内省你的 Postgres 自动生成草稿（role/pii 留 TODO 占位，解析器在你完成标注前拒绝运行：「忘标 PII」在机制上不可能）。
-2. **零 Go 物化一份 Layer-2 SQLite 快照**——用 `cmd/etl` 对准真 Postgres（只读抽取、在途脱敏），或用 `cmd/seed` 对准声明式 `seed.yaml`（合成数据，见 `examples/toygame`）。无需写任何 adapter 代码。
+2. **零 Go 物化一份 Layer-2 SQLite 快照**——用 `cmd/etl` 对准真 Postgres（只读抽取、在途脱敏），用 `cmd/csv` 对准 CSV 文件（如 Kaggle 导出——与 Postgres 路径完全相同的脱敏方式，见 `examples/bankchurn`），或用 `cmd/seed` 对准声明式 `seed.yaml`（合成数据，见 `examples/toygame`）。三条入口，一个统一连接。无需写任何 adapter 代码。
 3. **跑 Agent**，对着这份快照提问。它把你的 schema 解析成「Digest」（告诉 LLM 能问什么），把工具调用经白名单 SQL 构造器路由，再叙述结果。
 
-仓库自带一个完整、可跑的示例：[`examples/toygame`](examples/toygame) —— 一个用合成数据的虚构挂机游戏。把它当作你自己 adapter 的模板。
+仓库自带两个可跑的示例，均为纯 YAML（零 Go）：[`examples/bankchurn`](examples/bankchurn) —— 通过 CSV 车道接入的**真实** CC0 数据集（从这里开始）——以及 [`examples/toygame`](examples/toygame)，通过 `cmd/seed` 车道接入的合成挂机游戏。
 
 ## 写你自己的 adapter
 
@@ -107,6 +110,7 @@ agent/             Agent 契约（接口；与引擎无关）
 contract/          响应类型（分布行、profile）
 etl/               通用 ETL：schema 推导装配（derive）+ 编排（RunAll）
 etl/seedgen/       声明式合成数据生成器（seed.yaml → 确定性快照）
+etl/csvload/       CSV 文件 → 脱敏 Layer-2（镜像 seedgen；自带 CSV 即可用）
 etl/introspect/    Postgres 内省 + 接入草稿渲染（cmd/init 核心）
 etl_health/        启动就绪门控（min_rows / frozen / data_as_of）
 trajectory/        运行记录（写入侧 PII 脱敏）
@@ -116,9 +120,11 @@ prompts/           方法论 system prompt（不含业务数据）
 cmd/init/          从真 Postgres 内省生成 adapter 草稿（TODO 占位）
 cmd/etl/           通用 ETL runner——装配全部由 schema.yaml 推导，零 adapter 代码
 cmd/seed/          按声明式 seed.yaml 生成合成 Layer-2 快照（无需数据库）
+cmd/csv/           从 CSV 文件生成 Layer-2 快照（零 Go；将 CSV 视为 Layer-1 并脱敏）
 cmd/agent/         CLI 入口（REPL + 单发）
 cmd/eval/          eval 任务集运行器（确定性 CI gate；gate 失败退出码 1）
-examples/toygame/  可跑的合成示例 adapter——纯 YAML、零 Go（从这里开始）
+examples/toygame/  可跑的合成示例 adapter——纯 YAML、零 Go
+examples/bankchurn/  可跑的真实示例 adapter（Kaggle 银行客户流失，CC0）——纯 YAML、零 Go（从这里开始）
 ```
 
 ## 安全模型
