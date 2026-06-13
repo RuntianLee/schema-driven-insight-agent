@@ -6,6 +6,8 @@
 //	go run github.com/RuntianLee/schema-driven-insight-agent/cmd/seed \
 //	  -schema examples/toygame/schema.yaml -spec examples/toygame/seed.yaml
 //
+// 真实 CSV 接入示例见 examples/bankchurn（Kaggle CC0，10k 行），使用 cmd/csv 而非本命令。
+//
 // 产物仅限本地开发/演示，勿用于生产。
 package main
 

@@ -137,3 +137,25 @@ state_tables:
 		t.Fatalf("absent tuning: %+v, want zero value", s.Tuning)
 	}
 }
+
+func TestParse_ETLPolicyDataAsOf(t *testing.T) {
+	y := []byte(`
+version: 1
+domain: bank_churn
+etl_policy:
+  hash_salt: s
+  min_rows: 1
+  data_as_of: 1704067200
+state_tables:
+  customers:
+    fields:
+      id: {type: int64, role: actor_id, pk: true}
+`)
+	s, err := Parse(y)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if s.ETLPolicy == nil || s.ETLPolicy.DataAsOf != 1704067200 {
+		t.Fatalf("DataAsOf = %v, want 1704067200", s.ETLPolicy)
+	}
+}

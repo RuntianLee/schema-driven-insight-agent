@@ -123,6 +123,16 @@ go run github.com/RuntianLee/schema-driven-insight-agent/cmd/seed@v0.2.0 \
 
 `cmd/seed` generates a deterministic synthetic snapshot from a declarative `seed.yaml` (see "seed.yaml generator reference" below), mirroring `cmd/etl`'s readiness/health semantics. For dev/demo you can experience the full flow with no real DB.
 
+### Bring your own CSV (zero Go)
+
+Have a CSV (a Kaggle export, a report dump) instead of a live Postgres? The CSV is treated as a Layer-1 source and de-identified into Layer-2 exactly like the Postgres path.
+
+1. Write `schema.yaml`: declare a `data_sources` entry `{type: csv, path: ./your.csv}` plus the `layer2` sqlite output, map each CSV header to a field (mark identifiers `pii: true` / `omit_in_layer2: true`), and — if your CSV has no timestamp column — set `etl_policy.data_as_of` to a static snapshot time.
+2. Build: `go run ./cmd/csv -schema path/to/schema.yaml`. actor_id columns are hashed, `omit_in_layer2` columns dropped.
+3. Connect exactly like any adapter: point `cmd/agent` / `cmd/eval` at the produced db.
+
+See [`examples/bankchurn`](../examples/bankchurn) for a complete worked example (Kaggle Bank Customer Churn, CC0, 10k rows).
+
 ### Run the agent (`cmd/agent`, three envs)
 
 The CLI (`cmd/agent`) reads these environment variables:

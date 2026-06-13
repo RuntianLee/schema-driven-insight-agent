@@ -123,6 +123,16 @@ go run github.com/RuntianLee/schema-driven-insight-agent/cmd/seed@v0.2.0 \
 
 `cmd/seed` 按声明式 `seed.yaml` 生成确定性合成快照（详见下文「seed.yaml 生成器参考」），镜像 `cmd/etl` 的就绪/health 语义。dev/demo 无真库即可体验全流程。
 
+### 自带 CSV 接入（零 Go）
+
+手头有 CSV（Kaggle 导出、报表 dump），而非真实 Postgres？CSV 会被当作 Layer-1 数据源，以**与 Postgres 路径完全相同的方式**脱敏后生成 Layer-2。
+
+1. 写 `schema.yaml`：在 `data_sources` 下声明 `{type: csv, path: ./your.csv}` 以及 `layer2` sqlite 输出，把每个 CSV 表头映射到字段（标识符列打 `pii: true` / `omit_in_layer2: true`）；若 CSV 没有时间戳列，在 `etl_policy.data_as_of` 中填写一个静态快照时间。
+2. 构建：`go run ./cmd/csv -schema path/to/schema.yaml`。actor_id 列会被哈希，`omit_in_layer2` 列会被丢弃。
+3. 与任何其他 adapter 完全相同地连接：把 `cmd/agent` / `cmd/eval` 指向产出的 db 即可。
+
+完整示例见 [`examples/bankchurn`](../examples/bankchurn)（Kaggle 银行客户流失，CC0，10k 行）。
+
 ### 跑 Agent（`cmd/agent`，三个 env）
 
 CLI（`cmd/agent`）读以下环境变量：

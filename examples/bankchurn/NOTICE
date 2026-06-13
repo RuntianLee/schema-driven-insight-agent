@@ -1,0 +1,9 @@
+churn.csv — Bank Customer Churn dataset (10,000 rows, 14 columns)
+
+Origin:  https://www.kaggle.com/datasets/mathchi/churn-for-bank-customers
+License: CC0 1.0 Public Domain (https://creativecommons.org/publicdomain/zero/1.0/)
+Fetched from mirror: https://raw.githubusercontent.com/selva86/datasets/master/Churn_Modelling.csv
+  (byte-identical to the Kaggle CC0 file: same 14-column header, 10,000 rows,
+   first row CustomerId=15634602 / Surname=Hargrave / EstimatedSalary=101348.88 / Exited=1)
+
+Redistributed unmodified as a zero-code adapter example for the CSV ingestion lane.

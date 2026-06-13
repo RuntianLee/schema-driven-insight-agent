@@ -1,0 +1,21 @@
+# 流失分级 — 已流失客户的年龄分布。filter Exited=1（分类标签，非时间戳）。
+id: churn_by_age
+title: "流失分级 — 已流失客户年龄分布"
+question: "流失的银行客户主要集中在哪些年龄段？"
+llm_turns:
+  - '{"tool":"query_distribution","args":{"table":"customers","column":"Age","filter":{"Exited":{"op":"=","value":1}},"bucket_key":"age"}}'
+  - "流失集中在 40~49 段（806 人，占流失约 40%），是高价值流失人群。建议针对中年客户做留存。"
+evaluators:
+  data_correctness:
+    tool: query_distribution
+    expect_status: OK
+    profile: {count: 2037}
+    rows:
+      - match: {bucket: "40~49"}
+        expect: {player_count: 806}
+  reasoning_quality:
+    rubric: "是否识别流失集中年龄段并量化？"
+    min_score: 3
+  insight_novelty:
+    rubric: "是否给出留存/唤醒建议？"
+    min_score: 3

@@ -32,6 +32,7 @@ type rawETLPolicy struct {
 	HealthMinRows int64  `yaml:"health_min_rows"`
 	Frozen        bool   `yaml:"frozen"`
 	HealthPath    string `yaml:"health_path"`
+	DataAsOf      int64  `yaml:"data_as_of"`
 }
 
 type rawTuning struct {
@@ -138,7 +139,7 @@ func Parse(yamlBytes []byte) (*Schema, error) {
 		s.ETLPolicy = &ETLPolicy{
 			HashSalt: raw.HashSalt, HashSaltEnv: raw.HashSaltEnv,
 			MinRows: raw.MinRows, HealthMinRows: raw.HealthMinRows,
-			Frozen: raw.Frozen, HealthPath: raw.HealthPath,
+			Frozen: raw.Frozen, HealthPath: raw.HealthPath, DataAsOf: raw.DataAsOf,
 		}
 	}
 	for k, v := range r.DataSources {

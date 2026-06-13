@@ -32,6 +32,19 @@ jobs:
             -tasks examples/toygame/eval/tasks \
             -db examples/toygame/data/toygame.db
 
+      - name: bankchurn smoke (cmd/csv, real CC0 CSV, zero-code)
+        run: |
+          go run ./cmd/csv -schema examples/bankchurn/schema.yaml
+          echo "bankchurn built OK"
+
+      # deterministic eval gate — real CC0 data rebuilt from committed churn.csv
+      - name: bankchurn eval gate (cmd/eval, mock lane)
+        run: |
+          go run ./cmd/eval \
+            -schema examples/bankchurn/schema.yaml \
+            -tasks examples/bankchurn/eval/tasks \
+            -db examples/bankchurn/data/churn.db
+
   integration:
     runs-on: ubuntu-latest
     steps:

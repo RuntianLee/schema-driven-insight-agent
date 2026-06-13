@@ -24,21 +24,24 @@ Most "chat with your data" tools either (a) let an LLM write raw SQL against pro
 git clone https://github.com/RuntianLee/schema-driven-insight-agent
 cd schema-driven-insight-agent
 
-# 1. Generate a synthetic Layer-2 snapshot (1000 fake players, declarative, no Go, no PG)
-go run ./cmd/seed -schema examples/toygame/schema.yaml -spec examples/toygame/seed.yaml
+# 1. Build a de-identified Layer-2 snapshot from a real CC0 CSV (zero Go, no PG).
+#    CustomerId is hashed and Surname dropped — all derived from schema.yaml.
+go run ./cmd/csv -schema examples/bankchurn/schema.yaml
 
 # 2. Ask the agent a question
-SCHEMA_PATH=examples/toygame/schema.yaml \
-SQLITE_PATH=examples/toygame/data/toygame.db \
-ETL_HEALTH_PATH=examples/toygame/data/etl_health.json \
-go run ./cmd/agent -q "玩家的金币余额分布是怎样的？"
+SCHEMA_PATH=examples/bankchurn/schema.yaml \
+SQLITE_PATH=examples/bankchurn/data/churn.db \
+ETL_HEALTH_PATH=examples/bankchurn/data/etl_health.json \
+go run ./cmd/agent -q "银行客户的账户余额分布是怎样的？"
 
 # 3. Run the deterministic eval gate (no API key needed)
-go run ./cmd/eval -schema examples/toygame/schema.yaml \
-  -tasks examples/toygame/eval/tasks -db examples/toygame/data/toygame.db
+go run ./cmd/eval -schema examples/bankchurn/schema.yaml \
+  -tasks examples/bankchurn/eval/tasks -db examples/bankchurn/data/churn.db
 ```
 
-Without `MINIMAX_API_KEY` set, the answer falls back to a stateless **mock placeholder** — the tool/SQL path still executes on the real synthetic data, but the mock reply doesn't render it. Set a provider key (see `config/llm.example.yaml`) to get the real distribution table **and** proactive insight in the answer.
+`examples/bankchurn` is a **real** public dataset (Kaggle Bank Customer Churn, CC0, 10k rows) wired in with **zero Go** — `schema.yaml` only. Prefer synthetic data, or have no CSV to hand? `examples/toygame` shows the declarative `cmd/seed` path: `go run ./cmd/seed -schema examples/toygame/schema.yaml -spec examples/toygame/seed.yaml`.
+
+Without `MINIMAX_API_KEY` set, the answer falls back to a stateless **mock placeholder** — the tool/SQL path still executes on the real data, but the mock reply doesn't render it. Set a provider key (see `config/llm.example.yaml`) to get the real distribution table **and** proactive insight in the answer.
 
 ## Architecture
 
@@ -51,7 +54,7 @@ flowchart TB
     end
     subgraph CORE["framework core (this repo · zero business hardcode)"]
         SP["schema_protocol<br/>parses schema.yaml → Digest + SQL builder<br/>(rejects role/pii TODO placeholders)"]
-        ETL["cmd/etl + cmd/seed<br/>materialize Layer 2 — assembly fully derived from schema.yaml"]
+        ETL["cmd/etl + cmd/csv + cmd/seed<br/>materialize Layer 2 — assembly fully derived from schema.yaml"]
         INIT["cmd/init<br/>scaffold a draft schema from live Postgres"]
         HE["etl_health<br/>startup readiness gate"]
         TR["trajectory<br/>every run recorded (PII redacted on write)"]
@@ -88,10 +91,10 @@ flowchart TB
 ## How it works
 
 1. **Write a `schema.yaml`** declaring your `state_tables` (columns, `role`, `pii`, `omit_in_layer2`), `glossary.buckets` (distribution segments), and an `etl_policy` block — or let **`cmd/init`** introspect your Postgres and generate a draft (it leaves `role`/`pii` as TODO placeholders that the parser refuses to run until you annotate them: forgetting to mark PII is mechanically impossible).
-2. **Materialize a Layer-2 SQLite snapshot with zero Go** — point `cmd/etl` at a real Postgres (read-only extraction, de-identified in flight) or `cmd/seed` at a declarative `seed.yaml` (synthetic data, see `examples/toygame`). No adapter code to write.
+2. **Materialize a Layer-2 SQLite snapshot with zero Go** — point `cmd/etl` at a real Postgres (read-only extraction, de-identified in flight), `cmd/csv` at a CSV file (e.g. a Kaggle export — treated as Layer-1 and de-identified the same way, see `examples/bankchurn`), or `cmd/seed` at a declarative `seed.yaml` (synthetic data, see `examples/toygame`). Three on-ramps, one uniform connection. No adapter code to write.
 3. **Run the agent** against that snapshot. It parses your schema into a "Digest" (what the LLM is told it can ask), routes tool calls through the whitelisted SQL builder, and narrates the result.
 
-The repo ships a complete, runnable example: [`examples/toygame`](examples/toygame) — a fictional idle game with synthetic data. Use it as the template for your own adapter.
+The repo ships two runnable examples, both YAML-only (zero Go): [`examples/bankchurn`](examples/bankchurn) — a **real** CC0 dataset via the CSV lane (start here) — and [`examples/toygame`](examples/toygame), a synthetic idle game via the `cmd/seed` lane.
 
 ## Write your own adapter
 
@@ -118,6 +121,7 @@ agent/             agent contract (interfaces; engine-agnostic)
 contract/          response types (distribution rows, profile)
 etl/               generic ETL: schema-derived assembly (derive), orchestration (RunAll)
 etl/seedgen/       declarative synthetic data generator (seed.yaml → deterministic snapshot)
+etl/csvload/       CSV file → de-identified Layer-2 (mirrors seedgen; bring your own CSV)
 etl/introspect/    Postgres introspection + adapter-draft rendering (cmd/init core)
 etl_health/        startup readiness gate (min_rows / frozen / data_as_of)
 trajectory/        run recording (PII redacted on write)
@@ -127,9 +131,11 @@ prompts/           methodology system prompt (no business data)
 cmd/init/          scaffold a new adapter from a live Postgres (draft with TODO placeholders)
 cmd/etl/           generic ETL runner — everything derived from schema.yaml, no adapter code
 cmd/seed/          synthetic Layer-2 snapshot from a declarative seed.yaml (no database needed)
+cmd/csv/           Layer-2 snapshot from a CSV file (zero Go; treats CSV as Layer-1, de-identifies)
 cmd/agent/         the CLI entry point (REPL + single-shot)
 cmd/eval/          eval suite runner (deterministic CI gate; exit 1 on gate failure)
-examples/toygame/  runnable synthetic example adapter — YAML only, zero Go (start here)
+examples/toygame/  runnable synthetic example adapter — YAML only, zero Go
+examples/bankchurn/  runnable REAL example adapter (Kaggle Bank Customer Churn, CC0) — YAML only, zero Go (start here)
 ```
 
 ## Status
