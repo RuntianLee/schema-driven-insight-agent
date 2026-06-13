@@ -1,0 +1,22 @@
+# group_by — 各国流失对比。
+id: churn_by_geography
+title: "group_by — 各国客户流失对比"
+question: "不同国家的客户流失率有何差异？"
+llm_turns:
+  - '{"tool":"query_distribution","args":{"table":"customers","column":"Exited","group_by":["Geography"]}}'
+  - "德国流失计数 814、占该国约 32%，显著高于法国/西班牙（约 16%）。建议优先排查德国市场体验。"
+evaluators:
+  data_correctness:
+    tool: query_distribution
+    expect_status: OK
+    groups:
+      - match: {group: "Germany"}
+        rows:
+          - match: {bucket: "1"}
+            expect: {player_count: 814}
+  reasoning_quality:
+    rubric: "是否对比各国流失差异？"
+    min_score: 3
+  insight_novelty:
+    rubric: "是否给出分市场运营建议？"
+    min_score: 3

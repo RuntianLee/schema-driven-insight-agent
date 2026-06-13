@@ -12,6 +12,10 @@ etl_policy:
 
 tuning:
   groups_top_n: 5
+  # 账户余额等连续列 distinct 高（Balance 6201 种）；默认阈值 1000 会让分桶查询
+  # 不附逐桶 Data 行（仅给画像）。抬到数据集规模，让 balance 分桶的 5 行桶随响应返回
+  # （分桶查询附带的就是 5 行桶，payload 仍极小）。
+  rows_attach_threshold: 10000
 
 data_sources:
   source:

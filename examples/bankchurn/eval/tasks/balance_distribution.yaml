@@ -1,0 +1,22 @@
+# 示例任务：账户余额分布（分桶）。data_correctness 断言真实 churn.db 精确计数。
+# 查状态表 customers 的 Balance 列（即账户余额）；多货币 pivot 见 customer_balances 派生表。
+id: balance_distribution
+title: "账户余额分布"
+question: "银行客户的账户余额分布是怎样的？"
+llm_turns:
+  - '{"tool":"query_distribution","args":{"table":"customers","column":"Balance","bucket_key":"account_balance"}}'
+  - "余额高度集中在低区间：约 36% 客户处于 ≤25k 段（其中绝大多数为零余额）。建议针对零余额客户做激活。"
+evaluators:
+  data_correctness:
+    tool: query_distribution
+    expect_status: OK
+    profile: {count: 10000}
+    rows:
+      - match: {bucket: "0~25k"}
+        expect: {player_count: 3623}
+  reasoning_quality:
+    rubric: "是否识别余额集中区间并量化？"
+    min_score: 3
+  insight_novelty:
+    rubric: "是否给出运营含义（如零余额客户唤醒）？"
+    min_score: 3
