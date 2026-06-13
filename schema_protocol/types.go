@@ -22,6 +22,7 @@ type ETLPolicy struct {
 	HealthMinRows int64  // Agent 启动 Ready() 行数下限；0=未设置（用 etl_health 包默认）
 	Frozen        bool   // 冻结历史快照（跳过 24h 失鲜检查）
 	HealthPath    string // health 文件路径（相对 schema 目录）；空=与 layer2 db 同目录 etl_health.json
+	DataAsOf      int64  // 无 last_seen role 的冻结快照显式声明 as_of（unix 秒）→ 写入 health/_meta；0=未设置
 }
 
 // Tuning 承载 query_distribution 的画像/Top-N 阈值。
