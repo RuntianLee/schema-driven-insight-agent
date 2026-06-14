@@ -49,6 +49,109 @@ type Options struct {
 	Commit       string                 // history 行的 commit SHA
 }
 
+// seedTaskDB 实现 fixture 三级解析（YAML > Go > -db 共享库），返回连接 + 清理函数。
+func seedTaskDB(schema *schema_protocol.Schema, task tasks.Task, opts Options) (*sql.DB, func(), error) {
+	goSeed, hasGo := opts.Fixtures[task.ID]
+	switch {
+	case !task.Fixture.IsZero():
+		if hasGo {
+			fmt.Fprintf(os.Stderr, "warn: 任务 %s 同时声明 YAML/Go fixture，YAML 优先\n", task.ID)
+		}
+		dir, err := os.MkdirTemp("", opts.Adapter+"eval-")
+		if err != nil {
+			return nil, nil, fmt.Errorf("mktemp: %w", err)
+		}
+		db, err := buildFixtureDB(schema, task.Fixture, dir)
+		if err != nil {
+			os.RemoveAll(dir)
+			return nil, nil, fmt.Errorf("fixture %s: %w", task.ID, err)
+		}
+		return db, func() { db.Close(); os.RemoveAll(dir) }, nil
+	case hasGo:
+		dir, err := os.MkdirTemp("", opts.Adapter+"eval-")
+		if err != nil {
+			return nil, nil, fmt.Errorf("mktemp: %w", err)
+		}
+		db, err := goSeed(dir)
+		if err != nil {
+			os.RemoveAll(dir)
+			return nil, nil, fmt.Errorf("seed %s: %w", task.ID, err)
+		}
+		return db, func() { db.Close(); os.RemoveAll(dir) }, nil
+	case opts.SharedDBPath != "":
+		// 预检：sqlite 的 Open 是惰性的，路径打错会被默默建成空库，把「路径错」
+		// 变成下游「gate 失败」的迷雾。先 Stat 给出友好报错（恢复旧 cmd/eval 行为）。
+		if _, statErr := os.Stat(opts.SharedDBPath); statErr != nil {
+			return nil, nil, fmt.Errorf("共享 db %s 不可用（先跑 seed/ETL）: %w", opts.SharedDBPath, statErr)
+		}
+		db, err := sql.Open("sqlite", opts.SharedDBPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open shared db %s: %w", opts.SharedDBPath, err)
+		}
+		return db, func() { db.Close() }, nil
+	default:
+		return nil, nil, fmt.Errorf("任务 %s 无 fixture（YAML fixture / Go fixture / -db 三选一）", task.ID)
+	}
+}
+
+// judgeClientFor 按 opts.UseRealLLM 选取 judge client。
+func judgeClientFor(opts Options, realJudge llm.Client) llm.Client {
+	if opts.UseRealLLM {
+		return realJudge
+	}
+	return evaluators.NewMockJudge()
+}
+
+// runPass 是可复用的单轮评测核心：对 taskList 逐任务 seed fixture → RunSuite → 合并报告。
+// provider 非 nil 则开 reflection（config B）；nil 为 baseline（config A）。
+// trajDB 非 nil 则落轨迹；nil 则纯内存。
+func runPass(
+	schema *schema_protocol.Schema, taskList []tasks.Task, opts Options,
+	agentLLM, judge llm.Client, provider runners.ReflectionProvider, trajDB *sql.DB,
+) (*evalpkg.Report, error) {
+	merged := evalpkg.NewReport(evalOrder)
+	for _, task := range taskList {
+		if opts.OnlyTask != "" && task.ID != opts.OnlyTask {
+			continue
+		}
+		db, cleanup, err := seedTaskDB(schema, task, opts)
+		if err != nil {
+			return nil, err
+		}
+		distTool := tools.NewDistributionTool(schema, db)
+		reg := tools.NewRegistry()
+		reg.Register("query_distribution", func(ctx context.Context, args map[string]any) (contract.Response, error) {
+			return distTool.Run(ctx, tools.ArgsToQueryDistributionInput(args)), nil
+		})
+		analyzeTool := tools.NewAnalyzeTool(schema, db)
+		reg.Register("analyze", func(ctx context.Context, args map[string]any) (contract.Response, error) {
+			return analyzeTool.Run(ctx, tools.ArgsToAnalyzeInput(args)), nil
+		})
+
+		evalReg := evaluators.NewRegistry()
+		evalReg.Register(evaluators.NewDataCorrectness())
+		evalReg.Register(evaluators.NewReasoningQuality(judge))
+		evalReg.Register(evaluators.NewInsightNovelty(judge))
+
+		rep, err := runners.RunSuite(context.Background(), runners.Config{
+			Dispatcher:         reg,
+			SchemaCtx:          schema.Digest(),
+			EvalReg:            evalReg,
+			EvalOrder:          evalOrder,
+			Tasks:              []runners.TaskInput{toTaskInput(task)},
+			TrajDB:             trajDB,
+			AgentLLM:           agentLLM,
+			ReflectionProvider: provider,
+		})
+		cleanup()
+		if err != nil {
+			return nil, err
+		}
+		mergeInto(merged, rep)
+	}
+	return merged, nil
+}
+
 // Run 逐任务 seed fixture → RunSuite → 合并报告。
 func Run(opts Options) (*evalpkg.Report, error) {
 	schemaData, err := os.ReadFile(opts.SchemaPath)
@@ -87,86 +190,9 @@ func Run(opts Options) (*evalpkg.Report, error) {
 		agentLLM, realJudge = real, real
 	}
 
-	merged := evalpkg.NewReport(evalOrder)
-	for _, task := range taskList {
-		if opts.OnlyTask != "" && task.ID != opts.OnlyTask {
-			continue
-		}
-		// fixture 三级解析：YAML fixture > Go FixtureFunc > -db 共享库（都没有→loud-fail）。
-		var db *sql.DB
-		goSeed, hasGo := opts.Fixtures[task.ID]
-		switch {
-		case !task.Fixture.IsZero():
-			if hasGo {
-				fmt.Fprintf(os.Stderr, "warn: 任务 %s 同时声明 YAML fixture 与 Go fixture，YAML 优先\n", task.ID)
-			}
-			dir, err := os.MkdirTemp("", opts.Adapter+"eval-")
-			if err != nil {
-				return nil, fmt.Errorf("mktemp: %w", err)
-			}
-			defer os.RemoveAll(dir)
-			db, err = buildFixtureDB(schema, task.Fixture, dir)
-			if err != nil {
-				return nil, fmt.Errorf("fixture %s: %w", task.ID, err)
-			}
-		case hasGo:
-			dir, err := os.MkdirTemp("", opts.Adapter+"eval-")
-			if err != nil {
-				return nil, fmt.Errorf("mktemp: %w", err)
-			}
-			defer os.RemoveAll(dir)
-			db, err = goSeed(dir)
-			if err != nil {
-				return nil, fmt.Errorf("seed %s: %w", task.ID, err)
-			}
-		case opts.SharedDBPath != "":
-			// 预检：sqlite 的 Open 是惰性的，路径打错会被默默建成空库，把「路径错」
-			// 变成下游「gate 失败」的迷雾。先 Stat 给出友好报错（恢复旧 cmd/eval 行为）。
-			if _, statErr := os.Stat(opts.SharedDBPath); statErr != nil {
-				return nil, fmt.Errorf("共享 db %s 不可用（先跑 seed/ETL）: %w", opts.SharedDBPath, statErr)
-			}
-			var err error
-			db, err = sql.Open("sqlite", opts.SharedDBPath)
-			if err != nil {
-				return nil, fmt.Errorf("open shared db %s: %w", opts.SharedDBPath, err)
-			}
-		default:
-			return nil, fmt.Errorf("任务 %s 无 fixture（YAML fixture / Go fixture / -db 三选一）", task.ID)
-		}
-
-		distTool := tools.NewDistributionTool(schema, db)
-		reg := tools.NewRegistry()
-		reg.Register("query_distribution", func(ctx context.Context, args map[string]any) (contract.Response, error) {
-			return distTool.Run(ctx, tools.ArgsToQueryDistributionInput(args)), nil
-		})
-		analyzeTool := tools.NewAnalyzeTool(schema, db)
-		reg.Register("analyze", func(ctx context.Context, args map[string]any) (contract.Response, error) {
-			return analyzeTool.Run(ctx, tools.ArgsToAnalyzeInput(args)), nil
-		})
-
-		evalReg := evaluators.NewRegistry()
-		evalReg.Register(evaluators.NewDataCorrectness())
-		var judge llm.Client = evaluators.NewMockJudge()
-		if opts.UseRealLLM {
-			judge = realJudge
-		}
-		evalReg.Register(evaluators.NewReasoningQuality(judge))
-		evalReg.Register(evaluators.NewInsightNovelty(judge))
-
-		rep, err := runners.RunSuite(context.Background(), runners.Config{
-			Dispatcher: reg,
-			SchemaCtx:  schema.Digest(),
-			EvalReg:    evalReg,
-			EvalOrder:  evalOrder,
-			Tasks:      []runners.TaskInput{toTaskInput(task)},
-			TrajDB:     trajDB,
-			AgentLLM:   agentLLM,
-		})
-		db.Close()
-		if err != nil {
-			return nil, err
-		}
-		mergeInto(merged, rep)
+	merged, err := runPass(schema, taskList, opts, agentLLM, judgeClientFor(opts, realJudge), nil, trajDB)
+	if err != nil {
+		return nil, err
 	}
 	return merged, nil
 }
