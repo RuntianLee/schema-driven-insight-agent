@@ -101,3 +101,54 @@ func TestDataCorrectness_MissingToolFails(t *testing.T) {
 		t.Fatalf("missing tool call should fail")
 	}
 }
+
+func TestDataCorrectness_TableMatcher(t *testing.T) {
+	res := TaskResult{ToolCalls: []ToolCall{{
+		Name: "analyze",
+		Response: contract.Response{
+			Status: contract.StatusOK,
+			Table: &contract.TableResult{
+				Columns:  []contract.ColumnMeta{{Name: "server_id"}, {Name: "players"}, {Name: "total"}},
+				Rows:     [][]any{{int64(1), int64(150), int64(90000000)}, {int64(2), int64(60), int64(42000000)}},
+				RowCount: 2,
+			},
+		},
+	}}}
+	specYAML := `
+tool: analyze
+expect_status: OK
+table:
+  - match: {server_id: "1"}
+    expect: {players: 150, total: 90000000}
+  - match: {server_id: "2"}
+    expect: {players: 60}
+`
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(specYAML), &node); err != nil {
+		t.Fatal(err)
+	}
+	score, err := NewDataCorrectness().Evaluate(context.Background(), res, node.Content[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !score.Pass {
+		t.Fatalf("want pass, got %+v", score)
+	}
+}
+
+func TestDataCorrectness_TableMatcherFails(t *testing.T) {
+	res := TaskResult{ToolCalls: []ToolCall{{
+		Name: "analyze",
+		Response: contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+			Columns: []contract.ColumnMeta{{Name: "server_id"}, {Name: "players"}},
+			Rows:    [][]any{{int64(1), int64(150)}},
+		}},
+	}}}
+	specYAML := "tool: analyze\nexpect_status: OK\ntable:\n  - match: {server_id: \"1\"}\n    expect: {players: 999}\n"
+	var node yaml.Node
+	_ = yaml.Unmarshal([]byte(specYAML), &node)
+	score, _ := NewDataCorrectness().Evaluate(context.Background(), res, node.Content[0])
+	if score.Pass {
+		t.Fatal("want fail on wrong expected value")
+	}
+}

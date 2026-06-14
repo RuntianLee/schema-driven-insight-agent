@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
@@ -24,12 +25,18 @@ type dcGroup struct {
 	Profile map[string]float64 `yaml:"profile"`
 }
 
+type dcTableRow struct {
+	Match  map[string]string  `yaml:"match"`
+	Expect map[string]float64 `yaml:"expect"`
+}
+
 type dcSpec struct {
 	Tool         string             `yaml:"tool"`
 	ExpectStatus string             `yaml:"expect_status"`
 	Profile      map[string]float64 `yaml:"profile"`
 	Rows         []dcRow            `yaml:"rows"`
 	Groups       []dcGroup          `yaml:"groups"`
+	Table        []dcTableRow       `yaml:"table"`
 }
 
 // DataCorrectness 是确定性 evaluator：对真实 tool 返回逐字段比对（spec §4.2）。
@@ -62,6 +69,9 @@ func (d *DataCorrectness) Evaluate(_ context.Context, res TaskResult, spec *yaml
 	}
 	for _, g := range sp.Groups {
 		fails = append(fails, checkGroup(resp.Groups, g)...)
+	}
+	for _, tr := range sp.Table {
+		fails = append(fails, checkTable(resp.Table, tr)...)
 	}
 
 	if len(fails) > 0 {
@@ -194,6 +204,82 @@ func checkGroup(groups []contract.GroupProfile, g dcGroup) []string {
 		fails = append(fails, checkProfile(&gp.Profile, g.Profile)...)
 	}
 	return fails
+}
+
+// checkTable 在 TableResult 里按 Match（列名→值字符串）找首个匹配行，再断言 Expect（列名→数值）。
+func checkTable(tr *contract.TableResult, want dcTableRow) []string {
+	if tr == nil {
+		return []string{"Table 为空，无法断言"}
+	}
+	idx := make(map[string]int, len(tr.Columns))
+	for i, c := range tr.Columns {
+		idx[c.Name] = i
+	}
+	for _, row := range tr.Rows {
+		if tableRowMatches(row, idx, want.Match) {
+			return checkTableExpect(row, idx, want.Match, want.Expect)
+		}
+	}
+	return []string{fmt.Sprintf("未找到匹配行 %v", want.Match)}
+}
+
+func tableRowMatches(row []any, idx map[string]int, match map[string]string) bool {
+	for k, v := range match {
+		i, ok := idx[k]
+		if !ok || i >= len(row) || cellToString(row[i]) != v {
+			return false
+		}
+	}
+	return true
+}
+
+func checkTableExpect(row []any, idx map[string]int, match map[string]string, expect map[string]float64) []string {
+	var fails []string
+	for k, v := range expect {
+		i, ok := idx[k]
+		if !ok || i >= len(row) {
+			fails = append(fails, fmt.Sprintf("table.%s 未知列", k))
+			continue
+		}
+		got, ok := cellToFloat(row[i])
+		if !ok {
+			fails = append(fails, fmt.Sprintf("table%v.%s 非数值", match, k))
+			continue
+		}
+		if !floatEq(got, v) {
+			fails = append(fails, fmt.Sprintf("table%v.%s=%g want %g", match, k, got, v))
+		}
+	}
+	return fails
+}
+
+func cellToString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case []byte:
+		return string(x)
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", x)
+	}
+}
+
+func cellToFloat(v any) (float64, bool) {
+	switch x := v.(type) {
+	case int64:
+		return float64(x), true
+	case float64:
+		return x, true
+	case int:
+		return float64(x), true
+	}
+	return 0, false
 }
 
 func floatEq(a, b float64) bool { return math.Abs(a-b) <= floatTol }
