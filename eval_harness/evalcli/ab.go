@@ -46,6 +46,8 @@ func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners
 		return nil, fmt.Errorf("load tasks %s: %w", opts.TasksDir, err)
 	}
 
+	// trajDB 恒传 nil：A/B 只产出 ABReport 聚合，不落轨迹库（variant tag 落库推到 #4，
+	// 见 spec WS-3 §B3.6）。两遍仅靠 provider 区分（A=nil 关、B=provider 开）。
 	var aReports, bReports []*evalpkg.Report
 	for i := 0; i < runs; i++ {
 		ra, err := runPass(schema, taskList, opts, agentLLM, judge, nil, nil)
