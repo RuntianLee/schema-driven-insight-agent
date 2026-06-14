@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/RuntianLee/schema-driven-insight-agent/eino_agent"
 	evalpkg "github.com/RuntianLee/schema-driven-insight-agent/eval_harness"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/runners"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/tasks"
@@ -75,6 +76,17 @@ func FinishAB(ab *evalpkg.ABReport, opts Options) int {
 			if js, err := ab.JSON(); err == nil {
 				_ = os.WriteFile(filepath.Join(opts.OutDir, stamp+"-ab-report.json"), js, 0o644)
 			}
+		}
+	}
+	if opts.HistoryOut != "" {
+		meta := evalpkg.ABHistoryMeta{
+			Commit:       opts.Commit,
+			Adapter:      opts.Adapter,
+			AgentVersion: eino_agent.AgentVersion,
+			RanAt:        time.Now().Unix(),
+		}
+		if err := evalpkg.AppendABHistoryJSONL(opts.HistoryOut, ab, meta); err != nil {
+			fmt.Fprintln(os.Stderr, "warn: 写 ab-history 失败:", err)
 		}
 	}
 	return 0
