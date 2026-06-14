@@ -39,6 +39,9 @@ type Config struct {
 	// AgentLLM 非 nil 则 agent 用它推理（真评测道），task.LLMTurns 被忽略；
 	// nil 则退回 sequencedMock（确定性 mock 道，CI 默认）。
 	AgentLLM llm.Client
+	// ReflectionProvider 非 nil 则在 agent 跑每个任务前，把其返回的上下文前置注入 question
+	// （reflection 开，A/B 的 config B）；nil（默认）= reflection 关（config A / 既有行为）。
+	ReflectionProvider ReflectionProvider
 }
 
 // RunSuite 逐任务跑 agent（mock LLM）+ 真 tool，收集 TaskResult，跑 evaluator，汇总 Report。
@@ -64,7 +67,8 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 			return store, nil
 		}
 		runner := eino_agent.New(agentClient, cfg.Dispatcher, opener, cfg.SchemaCtx)
-		answer, runErr := runner.Run(ctx, task.Question)
+		runQuestion := applyReflection(ctx, cfg.ReflectionProvider, task.ID, task.Question)
+		answer, runErr := runner.Run(ctx, runQuestion)
 
 		res := evaluators.TaskResult{
 			TaskID:    task.ID,
@@ -98,6 +102,20 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		}
 	}
 	return rep, nil
+}
+
+// applyReflection 在 provider 非 nil 且返回非空时，把 reflection 上下文前置到 question。
+// eino_agent 零改动：reflection 作为额外上下文随 question 进入 agent 本轮对话。
+// #4 可改注入点（如 schemaContext / 专用记忆轮），本接缝对 A/B 编排足够。
+func applyReflection(ctx context.Context, p ReflectionProvider, taskID, question string) string {
+	if p == nil {
+		return question
+	}
+	rc, err := p.ContextFor(ctx, taskID, question)
+	if err != nil || rc == "" {
+		return question
+	}
+	return rc + "\n\n---\n\n" + question
 }
 
 // persistVerdict 把一个 evaluator 评分写入 eval_results（与 trajectory 关联）。
