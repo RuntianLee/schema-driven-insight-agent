@@ -28,8 +28,19 @@ func main() {
 	flag.StringVar(&opts.Commit, "commit", "", "写入 history 行的 commit SHA（CI 传 $GITHUB_SHA）")
 	flag.StringVar(&opts.ConfigPath, "config", "config/llm.yaml", "LLM provider YAML（-llm minimax 时 agent+judge 共用）")
 	llmMode := flag.String("llm", "mock", "agent/judge LLM：mock（确定性，CI 默认）| minimax")
+	mode := flag.String("mode", "suite", "suite（默认，确定性 gate）| ab（reflection 增益 A/B，需 -llm minimax，off-gate）")
+	runs := flag.Int("runs", 5, "ab 模式每配置重复次数")
 	flag.Parse()
 	opts.UseRealLLM = (*llmMode == "minimax")
+
+	if *mode == "ab" {
+		ab, err := evalcli.RunAB(opts, nil, *runs) // nil provider：#5 baseline 对照；#4 wire 真 provider
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "eval ab 失败:", err)
+			os.Exit(2)
+		}
+		os.Exit(evalcli.FinishAB(ab, opts))
+	}
 
 	rep, err := evalcli.Run(opts)
 	if err != nil {
