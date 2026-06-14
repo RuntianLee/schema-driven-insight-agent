@@ -133,7 +133,8 @@ cmd/etl/           generic ETL runner — everything derived from schema.yaml, n
 cmd/seed/          synthetic Layer-2 snapshot from a declarative seed.yaml (no database needed)
 cmd/csv/           Layer-2 snapshot from a CSV file (zero Go; treats CSV as Layer-1, de-identifies)
 cmd/agent/         the CLI entry point (REPL + single-shot)
-cmd/eval/          eval suite runner (deterministic CI gate; exit 1 on gate failure)
+cmd/eval/          eval suite runner (deterministic CI gate; exit 1 on gate failure; -mode ab for off-gate reflection A/B)
+cmd/eval-trend/    render cross-version trend HTML from eval-history.jsonl (zero deps, inline SVG)
 examples/toygame/  runnable synthetic example adapter — YAML only, zero Go
 examples/bankchurn/  runnable REAL example adapter (Kaggle Bank Customer Churn, CC0) — YAML only, zero Go (start here)
 ```
