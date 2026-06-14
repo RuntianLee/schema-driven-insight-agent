@@ -36,6 +36,20 @@ type TopRow struct {
 	PctPlayers  float64 `json:"pct_players"`
 }
 
+// ColumnMeta 描述 TableResult 的一列。Type 取自 schema 字段（聚合列可空）。
+type ColumnMeta struct {
+	Name string `json:"name"`
+	Type string `json:"type,omitempty"`
+}
+
+// TableResult 是通用 analyze 工具的表格结果（V2 路线 B）。
+// 与分布特化的 Profile/Groups/Data 并列、互斥使用——agent/Advisor/Memory 统一消费。
+type TableResult struct {
+	Columns  []ColumnMeta `json:"columns"`
+	Rows     [][]any      `json:"rows"`
+	RowCount int64        `json:"row_count"`
+}
+
 // DistProfile 是分布的紧凑统计描述（针对 WHERE 过滤后的子集）。SP1.A 起始终输出。
 // 分位用 nearest-rank（无线性插值）；Total 仅 role=balance 时填（其余列总和无业务意义）。
 // TailCount/TailPct = 0 表示 TopN 已覆盖全部 distinct 值（无尾部）。
@@ -83,6 +97,7 @@ type Response struct {
 	Groups     []GroupProfile `json:"groups,omitempty"`
 	GroupsTail *GroupsTail    `json:"groups_tail,omitempty"`
 	Data       []BucketRow    `json:"data,omitempty"`
+	Table      *TableResult   `json:"table,omitempty"`
 	Hint       string         `json:"hint,omitempty"`
 	SchemaPath string         `json:"schema_path,omitempty"`
 	Detail     map[string]any `json:"detail,omitempty"`
