@@ -152,3 +152,21 @@ func TestDataCorrectness_TableMatcherFails(t *testing.T) {
 		t.Fatal("want fail on wrong expected value")
 	}
 }
+
+func TestDataCorrectness_TableMatcherRejectsEmptyMatch(t *testing.T) {
+	res := TaskResult{ToolCalls: []ToolCall{{
+		Name: "analyze",
+		Response: contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+			Columns: []contract.ColumnMeta{{Name: "server_id"}, {Name: "players"}},
+			Rows:    [][]any{{int64(1), int64(150)}},
+		}},
+	}}}
+	// 空 match 会误配首行 → 必须当作断言错误而非通过。
+	specYAML := "tool: analyze\nexpect_status: OK\ntable:\n  - expect: {players: 150}\n"
+	var node yaml.Node
+	_ = yaml.Unmarshal([]byte(specYAML), &node)
+	score, _ := NewDataCorrectness().Evaluate(context.Background(), res, node.Content[0])
+	if score.Pass {
+		t.Fatal("空 match 应判失败（防误配首行）")
+	}
+}

@@ -211,6 +211,9 @@ func checkTable(tr *contract.TableResult, want dcTableRow) []string {
 	if tr == nil {
 		return []string{"Table 为空，无法断言"}
 	}
+	if len(want.Match) == 0 {
+		return []string{"table 断言缺少 match（空 match 会误配首行）"}
+	}
 	idx := make(map[string]int, len(tr.Columns))
 	for i, c := range tr.Columns {
 		idx[c.Name] = i
