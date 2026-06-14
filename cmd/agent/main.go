@@ -99,6 +99,10 @@ func main() {
 		in := tools.ArgsToQueryDistributionInput(args)
 		return distTool.Run(ctx, in), nil
 	})
+	analyzeTool := tools.NewAnalyzeTool(schema, bizDB)
+	registry.Register("analyze", func(ctx context.Context, args map[string]any) (contract.Response, error) {
+		return analyzeTool.Run(ctx, tools.ArgsToAnalyzeInput(args)), nil
+	})
 
 	// ── 7. 构建 Runner ────────────────────────────────────────────────────
 	opener := func(ctx context.Context, agentVersion, question string) (agent.TrajectoryStore, error) {

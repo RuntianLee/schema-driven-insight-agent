@@ -139,6 +139,10 @@ func Run(opts Options) (*evalpkg.Report, error) {
 		reg.Register("query_distribution", func(ctx context.Context, args map[string]any) (contract.Response, error) {
 			return distTool.Run(ctx, tools.ArgsToQueryDistributionInput(args)), nil
 		})
+		analyzeTool := tools.NewAnalyzeTool(schema, db)
+		reg.Register("analyze", func(ctx context.Context, args map[string]any) (contract.Response, error) {
+			return analyzeTool.Run(ctx, tools.ArgsToAnalyzeInput(args)), nil
+		})
 
 		evalReg := evaluators.NewRegistry()
 		evalReg.Register(evaluators.NewDataCorrectness())
