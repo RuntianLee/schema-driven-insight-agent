@@ -1,0 +1,17 @@
+id: crosstab
+title: "A/B 测试任务：分服计数"
+question: "各服多少玩家？"
+llm_turns: []
+fixture:
+  tables:
+    player_basics:
+      groups:
+        - {count: 7, values: {server_id: 1, level: 10}}
+        - {count: 3, values: {server_id: 2, level: 10}}
+evaluators:
+  data_correctness:
+    tool: analyze
+    expect_status: OK
+    table:
+      - match: {server_id: "1"}
+        expect: {n: 7}

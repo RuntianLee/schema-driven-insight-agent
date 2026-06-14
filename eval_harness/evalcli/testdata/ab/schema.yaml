@@ -1,0 +1,19 @@
+version: 1
+domain: ab_test
+etl_policy:
+  hash_salt: ab_test_v0
+  min_rows: 1
+  health_min_rows: 1
+  frozen: true
+data_sources:
+  layer2:
+    type: sqlite
+    path: ./data/ab.db
+state_tables:
+  player_basics:
+    nature: snapshot
+    primary_key: [player_id]
+    fields:
+      player_id: {type: int64, role: actor_id, pk: true, pii: true}
+      server_id: {type: int32, role: dimension, index: true}
+      level:     {type: int32, role: level, index: true}
