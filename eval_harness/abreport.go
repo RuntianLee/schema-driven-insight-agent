@@ -72,9 +72,10 @@ func BuildABReport(labelA, labelB string, runs int, aReports, bReports []*Report
 
 	ab.MinSuiteA, ab.MaxSuiteA = suiteRange(aReports, taskIDs)
 	ab.MinSuiteB, ab.MaxSuiteB = suiteRange(bReports, taskIDs)
-	// 区间重叠（B 最低 <= A 最高）→ delta 可能淹没在噪声里，提示加大样本（spec B3.4 触发条件）。
+	// B 最低 <= A 最高 → delta 可能淹没在噪声里（runs=1 时即 B≤A，无"区间"概念），
+	// 提示样本不足（spec B3.4 触发条件）。
 	if ab.MinSuiteB <= ab.MaxSuiteA {
-		ab.Caveat = "A/B suite 通过率区间重叠（B 最低 <= A 最高）：样本不足以判定增益显著，建议加大 -runs 或增加 headroom 难任务"
+		ab.Caveat = "样本不足以判定增益显著（runs=1 即 B≤A，或多轮下 A/B 通过率区间重叠）：建议加大 -runs 或增加 headroom 难任务"
 	}
 	return ab, nil
 }

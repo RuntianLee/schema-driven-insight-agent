@@ -51,6 +51,30 @@ func TestBuildABReport_OverlapSetsCaveat(t *testing.T) {
 	}
 }
 
+func TestBuildABReport_SingleRun_BNotAboveA_SetsCaveat(t *testing.T) {
+	// runs=1：B 通过率不高于 A（此处 A pass、B pass，rate 相等）→ 单次无法判定显著 → Caveat。
+	ab, err := BuildABReport("baseline", "reflection", 1,
+		[]*Report{repWith("t1", true)}, []*Report{repWith("t1", true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ab.Caveat == "" {
+		t.Fatalf("runs=1 且 B≤A 应填 Caveat（样本不足）")
+	}
+}
+
+func TestBuildABReport_SingleRun_BAboveA_NoCaveat(t *testing.T) {
+	// runs=1：B 通过（rate 1）> A 失败（rate 0）→ B 最低 > A 最高 → 不触发 Caveat。
+	ab, err := BuildABReport("baseline", "reflection", 1,
+		[]*Report{repWith("t1", false)}, []*Report{repWith("t1", true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ab.Caveat != "" {
+		t.Fatalf("runs=1 且 B>A 不应填 Caveat，得 %q", ab.Caveat)
+	}
+}
+
 func TestBuildABReport_LenMismatch(t *testing.T) {
 	if _, err := BuildABReport("a", "b", 2, []*Report{repWith("t1", true)}, nil); err == nil {
 		t.Fatal("runs 与报告数不符应报错")
