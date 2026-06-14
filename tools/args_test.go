@@ -55,3 +55,43 @@ func TestArgsToQueryDistributionInput_Empty(t *testing.T) {
 		t.Fatalf("expected zero-value input, got %+v", in)
 	}
 }
+
+func TestArgsToAnalyzeInput(t *testing.T) {
+	args := map[string]any{
+		"table":    "player_basics",
+		"group_by": []any{"server_id", "level"},
+		"filters": []any{
+			map[string]any{"field": "server_id", "op": "IN", "values": []any{float64(1), float64(2)}},
+			map[string]any{"field": "level", "op": ">=", "value": float64(15)},
+		},
+		"aggregates": []any{
+			map[string]any{"fn": "count", "as": "players"},
+			map[string]any{"fn": "avg", "column": "virtual_money", "as": "avg_money"},
+		},
+		"having":   []any{map[string]any{"alias": "players", "op": ">", "value": float64(100)}},
+		"order_by": []any{map[string]any{"key": "players", "desc": true}},
+		"limit":    float64(50),
+	}
+	in := ArgsToAnalyzeInput(args)
+	if in.Table != "player_basics" || in.Limit != 50 {
+		t.Fatalf("table/limit wrong: %+v", in)
+	}
+	if len(in.GroupBy) != 2 || in.GroupBy[1] != "level" {
+		t.Fatalf("group_by wrong: %v", in.GroupBy)
+	}
+	if len(in.Filters) != 2 || in.Filters[0].Op != "IN" || len(in.Filters[0].Values) != 2 {
+		t.Fatalf("filters wrong: %+v", in.Filters)
+	}
+	if in.Filters[1].Op != ">=" || in.Filters[1].Value != float64(15) {
+		t.Fatalf("scalar filter wrong: %+v", in.Filters[1])
+	}
+	if len(in.Aggregates) != 2 || in.Aggregates[1].Fn != "avg" || in.Aggregates[1].Column != "virtual_money" {
+		t.Fatalf("aggregates wrong: %+v", in.Aggregates)
+	}
+	if len(in.Having) != 1 || in.Having[0].Alias != "players" {
+		t.Fatalf("having wrong: %+v", in.Having)
+	}
+	if len(in.OrderBy) != 1 || !in.OrderBy[0].Desc || in.OrderBy[0].Key != "players" {
+		t.Fatalf("order_by wrong: %+v", in.OrderBy)
+	}
+}
