@@ -44,6 +44,33 @@ func IngestTrajectoryDB(ctx context.Context, store Store, trajDB *sql.DB, opts I
 		return IngestReport{}, fmt.Errorf("adapter is required")
 	}
 	rows, err := trajDB.QueryContext(ctx, `
+		WITH best_eval AS (
+			SELECT trajectory_id, task_id, pass, value
+			FROM (
+				SELECT
+					trajectory_id,
+					task_id,
+					pass,
+					value,
+					row_number() OVER (
+						PARTITION BY trajectory_id
+						ORDER BY pass DESC, value DESC, created_at DESC, task_id ASC
+					) AS rn
+				FROM eval_results
+				WHERE evaluator_name = 'data_correctness'
+			)
+			WHERE rn = 1
+		),
+		tool_path AS (
+			SELECT trajectory_id, group_concat(tool_name, ',') AS tools
+			FROM (
+				SELECT trajectory_id, tool_name, step_index
+				FROM trajectory_steps
+				WHERE tool_name IS NOT NULL
+				ORDER BY trajectory_id, step_index
+			)
+			GROUP BY trajectory_id
+		)
 		SELECT
 			t.trajectory_id,
 			coalesce(t.task_class, ''),
@@ -53,15 +80,12 @@ func IngestTrajectoryDB(ctx context.Context, store Store, trajDB *sql.DB, opts I
 			coalesce(er.task_id, ''),
 			coalesce(er.pass, 0),
 			coalesce(er.value, 0),
-			coalesce(group_concat(distinct s.tool_name), '')
+			coalesce(tp.tools, '')
 		FROM trajectories t
-		LEFT JOIN eval_results er
+		LEFT JOIN best_eval er
 			ON er.trajectory_id = t.trajectory_id
-			AND er.evaluator_name = 'data_correctness'
-		LEFT JOIN trajectory_steps s
-			ON s.trajectory_id = t.trajectory_id
-			AND s.tool_name IS NOT NULL
-		GROUP BY t.trajectory_id, er.task_id, er.pass, er.value
+		LEFT JOIN tool_path tp
+			ON tp.trajectory_id = t.trajectory_id
 		ORDER BY t.created_at ASC`)
 	if err != nil {
 		return IngestReport{}, fmt.Errorf("query trajectories: %w", err)
@@ -153,13 +177,11 @@ func splitCSV(s string) []string {
 	}
 	parts := strings.Split(s, ",")
 	out := make([]string, 0, len(parts))
-	seen := map[string]bool{}
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
-		if part == "" || seen[part] {
+		if part == "" {
 			continue
 		}
-		seen[part] = true
 		out = append(out, part)
 	}
 	return out

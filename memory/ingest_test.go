@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -64,6 +65,64 @@ func TestIngestTrajectoryDBOnlyKeepsSuccessfulEvaluatedRuns(t *testing.T) {
 	}
 	if strings.Contains(item.AnswerOutline, "{") || strings.Contains(item.AnswerOutline, "player_basics") {
 		t.Fatalf("answer outline should summarize tool path, got %q", item.AnswerOutline)
+	}
+}
+
+func TestIngestTrajectoryDBDeduplicatesEvalAndKeepsToolOrder(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	trajDB := newTrajectoryDB(t)
+
+	insertTrajectory(t, trajDB, "traj-dup", "benchmark", "success",
+		"How should activation be analyzed?",
+		"Use ordered tools for activation analysis.")
+	insertStep(t, trajDB, "traj-dup", 0, "tool_call", "query_distribution",
+		`{"profile":"level"}`, `{"status":"OK"}`)
+	insertStep(t, trajDB, "traj-dup", 1, "tool_call", "analyze",
+		`{"table":"player_basics"}`, `{"status":"OK"}`)
+	insertStep(t, trajDB, "traj-dup", 2, "tool_call", "analyze",
+		`{"table":"player_basics"}`, `{"status":"OK"}`)
+	insertEval(t, trajDB, "traj-dup", "activation_secondary", "data_correctness", 1, 0.5)
+	insertEval(t, trajDB, "traj-dup", "activation_primary", "data_correctness", 1, 1.0)
+
+	report, err := IngestTrajectoryDB(ctx, store, trajDB, IngestOptions{Adapter: "b3"})
+	if err != nil {
+		t.Fatalf("ingest trajectory db: %v", err)
+	}
+	if report.Inserted != 1 || report.Skipped != 0 {
+		t.Fatalf("report=%+v want inserted=1 skipped=0", report)
+	}
+
+	results, err := store.Search(ctx, Query{
+		Adapter:  "b3",
+		TaskID:   "activation_primary",
+		Question: "activation ordered tools",
+		Limit:    5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results len=%d want 1: %#v", len(results), results)
+	}
+	item := results[0].Item
+	if item.TaskID != "activation_primary" || item.Score != 1.0 {
+		t.Fatalf("task_id=%q score=%v want activation_primary/1.0", item.TaskID, item.Score)
+	}
+	wantPath := "Observed successful tool path: query_distribution -> analyze -> analyze"
+	if item.AnswerOutline != wantPath {
+		t.Fatalf("answer outline=%q want %q", item.AnswerOutline, wantPath)
+	}
+
+	var count int
+	err = store.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM memory_items WHERE source_type = 'eval' AND source_id = 'traj-dup:data_correctness'`,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("count memory rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("memory row count=%d want 1", count)
 	}
 }
 
@@ -163,7 +222,7 @@ func insertStep(t *testing.T, db *sql.DB, trajID string, idx int, typ, tool, inp
 	_, err := db.Exec(`INSERT INTO trajectory_steps
 		(step_id, trajectory_id, step_index, step_type, started_at, ended_at, tool_name, input, output)
 		VALUES (?, ?, ?, ?, 100, 101, ?, ?, ?)`,
-		trajID+"-step", trajID, idx, typ, tool, input, output)
+		fmt.Sprintf("%s-step-%d", trajID, idx), trajID, idx, typ, tool, input, output)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +233,7 @@ func insertEval(t *testing.T, db *sql.DB, trajID, taskID, evaluator string, pass
 	_, err := db.Exec(`INSERT INTO eval_results
 		(result_id, trajectory_id, task_id, evaluator_name, value, pass, display, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, 'ok', 100)`,
-		trajID+"-"+evaluator, trajID, taskID, evaluator, value, pass)
+		fmt.Sprintf("%s-%s-%s", trajID, evaluator, taskID), trajID, taskID, evaluator, value, pass)
 	if err != nil {
 		t.Fatal(err)
 	}
