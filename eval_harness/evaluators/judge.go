@@ -44,8 +44,8 @@ func (j *judgeEvaluator) Evaluate(ctx context.Context, res TaskResult, spec *yam
 	}
 	reply, perr := parseJudgeReply(raw)
 	if perr != nil {
-		// R3：解析失败不中断 suite，记 0 分 + 原文。
-		return Score{Evaluator: j.name, Value: 0, Pass: false,
+		// R3：解析失败不中断 suite，记 0 分 + 原文；视为未达标允许 refine 尝试改进。
+		return Score{Evaluator: j.name, Value: 0, Pass: false, BelowMin: true,
 			Display: "解析失败", Detail: fmt.Sprintf("judge 输出无效: %v（原文 %q）", perr, raw)}, nil
 	}
 	below := sp.MinScore > 0 && reply.Score < sp.MinScore
@@ -53,6 +53,7 @@ func (j *judgeEvaluator) Evaluate(ctx context.Context, res TaskResult, spec *yam
 		Evaluator: j.name,
 		Value:     float64(reply.Score) / 5.0,
 		Pass:      false, // judge 永不参与 gate
+		BelowMin:  below,
 		Display:   fmt.Sprintf("%d/5 %s", reply.Score, markBelow(below)),
 		Detail:    reply.Reason,
 	}, nil

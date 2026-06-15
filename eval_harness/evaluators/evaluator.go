@@ -34,6 +34,7 @@ type Score struct {
 	Evaluator string
 	Value     float64
 	Pass      bool
+	BelowMin  bool   // judge 评分低于任务 min_score（仅 judge 类有意义；供 reflexion 选择性触发）
 	Display   string // 报告人读："1.00 ✓" / "4/5 …"
 	Detail    string // 失败明细 / judge reason
 }
