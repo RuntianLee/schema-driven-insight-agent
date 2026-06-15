@@ -51,7 +51,7 @@ type ContextOptions struct {
 
 // Store is the long-term memory persistence boundary.
 type Store interface {
-	Upsert(ctx context.Context, item Item) error
+	Upsert(ctx context.Context, item Item) (string, error)
 	Search(ctx context.Context, q Query) ([]SearchResult, error)
 	MarkUsed(ctx context.Context, ids []string) error
 	Close() error
