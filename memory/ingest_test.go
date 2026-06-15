@@ -27,12 +27,17 @@ func TestIngestTrajectoryDBOnlyKeepsSuccessfulEvaluatedRuns(t *testing.T) {
 		`{"table":"player_basics"}`, `{"status":"ERR"}`)
 	insertEval(t, trajDB, "traj-fail", "broken_task", "data_correctness", 0, 0.0)
 
+	insertTrajectory(t, trajDB, "traj-no-eval", "benchmark", "success",
+		"successful run without eval", "should not enter memory")
+	insertStep(t, trajDB, "traj-no-eval", 0, "tool_call", "analyze",
+		`{"table":"player_basics"}`, `{"status":"OK"}`)
+
 	report, err := IngestTrajectoryDB(ctx, store, trajDB, IngestOptions{Adapter: "b3"})
 	if err != nil {
 		t.Fatalf("ingest trajectory db: %v", err)
 	}
-	if report.Inserted != 1 || report.Skipped != 1 {
-		t.Fatalf("report=%+v want inserted=1 skipped=1", report)
+	if report.Inserted != 1 || report.Skipped != 2 {
+		t.Fatalf("report=%+v want inserted=1 skipped=2", report)
 	}
 
 	results, err := store.Search(ctx, Query{

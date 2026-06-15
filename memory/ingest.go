@@ -76,26 +76,19 @@ func IngestTrajectoryDB(ctx context.Context, store Store, trajDB *sql.DB, opts I
 		if err := rows.Scan(&trajectoryID, &taskClass, &outcome, &question, &finalOutput, &taskID, &pass, &value, &toolCSV); err != nil {
 			return report, fmt.Errorf("scan trajectory memory source: %w", err)
 		}
-		if outcome != "success" || (taskID != "" && pass != 1) {
+		if outcome != "success" || taskID == "" || pass != 1 {
 			report.Skipped++
 			continue
 		}
 
-		sourceType := "trajectory"
-		sourceID := trajectoryID
-		score := 0.7
-		if taskID != "" {
-			sourceType = "eval"
-			sourceID = trajectoryID + ":data_correctness"
-			score = value
-			if score <= 0 {
-				score = 1
-			}
+		score := value
+		if score <= 0 {
+			score = 1
 		}
 		tools := splitCSV(toolCSV)
 		if _, err := store.Upsert(ctx, Item{
-			SourceType:    sourceType,
-			SourceID:      sourceID,
+			SourceType:    "eval",
+			SourceID:      trajectoryID + ":data_correctness",
 			Adapter:       opts.Adapter,
 			TaskID:        taskID,
 			TaskClass:     taskClass,
@@ -103,7 +96,7 @@ func IngestTrajectoryDB(ctx context.Context, store Store, trajDB *sql.DB, opts I
 			Summary:       summarizeText(finalOutput, question, 240),
 			AnswerOutline: toolPathOutline(tools),
 			Tools:         tools,
-			Tags:          compactStrings(sourceType, taskClass),
+			Tags:          compactStrings("eval", taskClass),
 			Score:         score,
 		}); err != nil {
 			return report, fmt.Errorf("upsert memory from trajectory %s: %w", trajectoryID, err)
