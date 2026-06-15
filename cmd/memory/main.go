@@ -65,6 +65,10 @@ func run(args []string, out io.Writer) int {
 			return 1
 		}
 		defer trajDB.Close()
+		if err := trajectory.Migrate(trajDB); err != nil {
+			fmt.Fprintf(out, "migrate trajectory db: %v\n", err)
+			return 1
+		}
 		report, err := memory.IngestTrajectoryDB(ctx, store, trajDB, memory.IngestOptions{Adapter: *adapter})
 		if err != nil {
 			fmt.Fprintf(out, "trajectory ingest: %v\n", err)
