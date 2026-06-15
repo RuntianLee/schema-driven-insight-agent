@@ -40,7 +40,7 @@ func TestRunAB_ProviderRaisesPassRate(t *testing.T) {
 		SchemaPath: "testdata/ab/schema.yaml",
 		TasksDir:   "testdata/ab/tasks",
 	}
-	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), fakeProvider{}, 3)
+	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), fakeProvider{}, 3, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,5 +52,47 @@ func TestRunAB_ProviderRaisesPassRate(t *testing.T) {
 	}
 	if ab.MeanPassRateB <= ab.MeanPassRateA {
 		t.Fatalf("reflection 应抬高通过率：A=%g B=%g", ab.MeanPassRateA, ab.MeanPassRateB)
+	}
+}
+
+// learningProvider 模拟「失败后学会」：Observe(fail) 后 ContextFor 才注入 REFLECT 标记，
+// 使 fakeLLM 在下一 trial 选对字段。Reset 退回未学习态。
+type learningProvider struct{ learned bool }
+
+func (p *learningProvider) ContextFor(_ context.Context, _, _ string) (string, error) {
+	if p.learned {
+		return "REFLECT: 过往经验提示用 server_id 分组", nil
+	}
+	return "", nil
+}
+
+func (p *learningProvider) Observe(_ context.Context, _ evaluators.TaskResult, passed bool) error {
+	if !passed {
+		p.learned = true
+	}
+	return nil
+}
+
+func (p *learningProvider) Reset() { p.learned = false }
+
+func TestRunAB_DesignBeta_CrossTrialAccumulation(t *testing.T) {
+	opts := Options{
+		Adapter:    "test",
+		SchemaPath: "testdata/ab/schema.yaml",
+		TasksDir:   "testdata/ab/tasks",
+	}
+	// runs=1（1 个独立样本），attempts=2（每样本 2 次 reflexion 尝试，取第 2 次）。
+	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), &learningProvider{}, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ab.MeanPassRateA != 0 {
+		t.Fatalf("config A（冷跑 wrong_field）应通过率 0，得 %g", ab.MeanPassRateA)
+	}
+	if ab.MeanPassRateB != 1 {
+		t.Fatalf("config B（第 2 次 reflexion 学会后）应通过率 1，得 %g", ab.MeanPassRateB)
+	}
+	if !ab.Meets20Pct {
+		t.Fatalf("delta=%g 应判定 Meets20Pct", ab.MeanDelta)
 	}
 }
