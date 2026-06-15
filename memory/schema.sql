@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS memory_items (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS memory_items_source_unique
-	ON memory_items(source_type, source_id)
+	ON memory_items(adapter, source_type, source_id)
 	WHERE source_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS memory_items_adapter_task_idx

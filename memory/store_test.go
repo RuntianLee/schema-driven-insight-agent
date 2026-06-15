@@ -128,6 +128,54 @@ func TestStoreUpsertBySourceIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestStoreUpsertBySourceIsAdapterScoped(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	b3ID, err := store.Upsert(ctx, Item{
+		SourceType: "manual",
+		SourceID:   "shared-note",
+		Adapter:    "b3",
+		Question:   "b3 retention note",
+		Summary:    "b3 retention memory",
+		Tools:      []string{"analyze"},
+		Tags:       []string{"retention"},
+	})
+	if err != nil {
+		t.Fatalf("upsert b3: %v", err)
+	}
+	tdID, err := store.Upsert(ctx, Item{
+		SourceType: "manual",
+		SourceID:   "shared-note",
+		Adapter:    "td",
+		Question:   "td retention note",
+		Summary:    "td retention memory",
+		Tools:      []string{"analyze"},
+		Tags:       []string{"retention"},
+	})
+	if err != nil {
+		t.Fatalf("upsert td: %v", err)
+	}
+	if b3ID == tdID {
+		t.Fatalf("adapter-scoped source ids should create distinct memory rows, got %q", b3ID)
+	}
+
+	b3Results, err := store.Search(ctx, Query{Adapter: "b3", Question: "retention", Limit: 5})
+	if err != nil {
+		t.Fatalf("search b3: %v", err)
+	}
+	if len(b3Results) != 1 || b3Results[0].Item.ID != b3ID {
+		t.Fatalf("b3 results=%#v want id %q", b3Results, b3ID)
+	}
+	tdResults, err := store.Search(ctx, Query{Adapter: "td", Question: "retention", Limit: 5})
+	if err != nil {
+		t.Fatalf("search td: %v", err)
+	}
+	if len(tdResults) != 1 || tdResults[0].Item.ID != tdID {
+		t.Fatalf("td results=%#v want id %q", tdResults, tdID)
+	}
+}
+
 func TestStoreUpsertBySourceConcurrent(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)

@@ -69,8 +69,7 @@ func (s *SQLiteStore) upsertBySource(ctx context.Context, item Item, toolsJSON, 
 			(item_id, source_type, source_id, adapter, task_id, task_class, question,
 			 summary, answer_outline, tools_json, tags_json, score, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(source_type, source_id) WHERE source_id IS NOT NULL DO UPDATE SET
-			adapter = excluded.adapter,
+		ON CONFLICT(adapter, source_type, source_id) WHERE source_id IS NOT NULL DO UPDATE SET
 			task_id = excluded.task_id,
 			task_class = excluded.task_class,
 			question = excluded.question,
