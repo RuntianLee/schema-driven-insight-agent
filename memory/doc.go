@@ -1,3 +1,5 @@
-// Package memory 是 V2 长期记忆子系统（SQLite + FTS5 起步，Milvus 推到 V2 末/V3 初）。
-// V0 仅占位，防止后续引入时的包级重构。见 design-v3.md §11 路线图。
+// Package memory 是 V2 长期记忆子系统。
+//
+// Memory 使用独立 SQLite+FTS5 memory.db 保存可重建、已脱敏的经验案例，
+// 不保存原始 prompt 或 tool payload。
 package memory
