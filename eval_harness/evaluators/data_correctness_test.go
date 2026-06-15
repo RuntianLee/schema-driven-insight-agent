@@ -3,6 +3,7 @@ package evaluators
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
@@ -169,4 +170,70 @@ func TestDataCorrectness_TableMatcherRejectsEmptyMatch(t *testing.T) {
 	if score.Pass {
 		t.Fatal("空 match 应判失败（防误配首行）")
 	}
+}
+
+// TestDataCorrectness_TableExpectPos 验证按列位置（expect_pos）断言的正确性。
+// 背景：真实 LLM 道中 agent 自由选取 as 别名，列名不可预测；
+// expect_pos 按绝对列索引断言，使别名鲁棒的正确答案不被"未知列"误判为失败。
+func TestDataCorrectness_TableExpectPos(t *testing.T) {
+	// 列名刻意设为 agent 自选别名"去重等级数"，而非黄金标准所期待的名字
+	tr := &contract.TableResult{
+		Columns:  []contract.ColumnMeta{{Name: "server_id"}, {Name: "去重等级数"}},
+		Rows:     [][]any{{"1", int64(2)}, {"2", int64(3)}},
+		RowCount: 2,
+	}
+
+	// 1. 正确的位置断言 → 应通过（空 fails）
+	t.Run("正确位置断言通过", func(t *testing.T) {
+		fails := checkTable(tr, dcTableRow{
+			Match:     map[string]string{"server_id": "1"},
+			ExpectPos: map[int]float64{1: 2},
+		})
+		if len(fails) != 0 {
+			t.Fatalf("expect pass, got fails: %v", fails)
+		}
+	})
+
+	// 2. 错误的期望值 → 应失败
+	t.Run("错误期望值失败", func(t *testing.T) {
+		fails := checkTable(tr, dcTableRow{
+			Match:     map[string]string{"server_id": "1"},
+			ExpectPos: map[int]float64{1: 99},
+		})
+		if len(fails) == 0 {
+			t.Fatal("expect fail on wrong value, got empty fails")
+		}
+	})
+
+	// 3. 旧的按列名断言：列名不存在时应返回"未知列"错误（证明旧路径仍按原样拒绝未知别名）
+	t.Run("按名断言未知列返回错误", func(t *testing.T) {
+		fails := checkTable(tr, dcTableRow{
+			Match:  map[string]string{"server_id": "1"},
+			Expect: map[string]float64{"distinct_levels": 2},
+		})
+		if len(fails) == 0 {
+			t.Fatal("expect fail for unknown column name, got empty fails")
+		}
+		found := false
+		for _, f := range fails {
+			if strings.Contains(f, "未知列") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expect '未知列' in failures, got: %v", fails)
+		}
+	})
+
+	// 4. 列索引越界 → 应失败
+	t.Run("列索引越界失败", func(t *testing.T) {
+		fails := checkTable(tr, dcTableRow{
+			Match:     map[string]string{"server_id": "1"},
+			ExpectPos: map[int]float64{5: 2},
+		})
+		if len(fails) == 0 {
+			t.Fatal("expect fail for out-of-range column index, got empty fails")
+		}
+	})
 }

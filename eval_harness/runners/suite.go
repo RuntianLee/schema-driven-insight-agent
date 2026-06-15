@@ -79,6 +79,8 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 			RunErr:    runErr,
 		}
 
+		scores := make(map[string]evaluators.Score, len(cfg.EvalOrder))
+		dcSeen := false
 		for _, name := range cfg.EvalOrder {
 			spec, hasSpec := task.Evaluators[name]
 			if !hasSpec {
@@ -96,9 +98,18 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 					Display: "ERR", Detail: err.Error()}
 			}
 			rep.Add(task.ID, score, e.Deterministic())
+			scores[name] = score
+			if name == "data_correctness" {
+				dcSeen = true
+			}
 			if cfg.TrajDB != nil && trajID != "" {
 				persistVerdict(cfg.TrajDB, trajID, task.ID, score)
 			}
+		}
+		// reflection 回写：把本任务全部裁决交给 provider（它据此区分「查询对/错」与「解读弱」）。
+		// 仅在确有 data_correctness 裁决时回写；失败仅吞，绝不干扰评测主流程。
+		if obs, ok := cfg.ReflectionProvider.(ReflectionObserver); ok && dcSeen {
+			_ = obs.Observe(ctx, res, scores)
 		}
 	}
 	return rep, nil
