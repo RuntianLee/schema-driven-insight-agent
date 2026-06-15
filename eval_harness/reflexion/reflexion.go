@@ -1,5 +1,9 @@
-// Package reflexion 实现跨试 Reflexion：agent 某任务失败后，用「自己的轨迹 + 二值成败」
-// 蒸出一条过程经验，按 taskID 累积进临时内存；ContextFor 把累积经验注入后续 trial。
+// Package reflexion 实现分域 Reflexion（Scoped Reflexion）：
+//   - 查询正确（data_correctness 通过）但解读弱（reasoning_quality 未过）→
+//     refine-explanation 模式：冻结正确查询，只精修解读，零额外 LLM 调用；
+//   - 查询错误（data_correctness 未过）→ fix-query 模式：自我批判蒸出过程经验，修查询；
+//   - 全部通过 → 无需反思。
+//
 // 实现 runners.ReflectionProvider（只读注入）+ runners.ReflectionObserver（失败回写）。
 // 临时内存：每个独立 reflexion 序列开始前由 A/B 编排器调 Reset 冷起（A/B 干净）。
 package reflexion
@@ -14,15 +18,22 @@ import (
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
 )
 
-// Provider 是跨试 Reflexion 的有状态实现。
-type Provider struct {
-	reflectLLM llm.Client
-	lessons    map[string][]string // taskID → 累积过程经验（临时内存）
+// refineHint：上次查询正确、仅解读弱时的提示——复用原查询、只改进解读。
+type refineHint struct {
+	queryCalls []evaluators.ToolCall // 上次【正确】的工具调用（原样复用，避免二次查询出错）
+	feedback   string                // reasoning judge 指出的解读不足
 }
 
-// New 构造 Provider；reflectLLM 用于失败后蒸经验（真道复用 MiniMax）。
+// Provider 是分域 Reflexion 的有状态实现。
+type Provider struct {
+	reflectLLM llm.Client
+	lessons    map[string][]string   // fix-query 模式：过程经验（临时内存）
+	refine     map[string]refineHint // refine-explanation 模式：冻结正确查询 + 改进解读
+}
+
+// New 构造 Provider；reflectLLM 用于查询失败后蒸经验（真道复用 MiniMax）。
 func New(reflectLLM llm.Client) *Provider {
-	return &Provider{reflectLLM: reflectLLM, lessons: make(map[string][]string)}
+	return &Provider{reflectLLM: reflectLLM, lessons: make(map[string][]string), refine: make(map[string]refineHint)}
 }
 
 // 编译期断言：实现两接缝。
@@ -31,38 +42,67 @@ var (
 	_ runners.ReflectionObserver = (*Provider)(nil)
 )
 
-// ContextFor 返回该 taskID 已累积的经验前缀；无经验返回空（= 与 baseline 等价）。
+// ContextFor 优先走 refine-explanation（查询已对，只改进解读）；否则走 fix-query 经验；都没有则空。
 func (p *Provider) ContextFor(_ context.Context, taskID, _ string) (string, error) {
-	ls := p.lessons[taskID]
-	if len(ls) == 0 {
-		return "", nil
+	if h, ok := p.refine[taskID]; ok {
+		return buildRefineContext(h), nil
 	}
-	var b strings.Builder
-	b.WriteString("过往尝试的经验教训（避免重复同样的过程失误）：")
-	for _, l := range ls {
-		b.WriteString("\n- ")
-		b.WriteString(l)
+	if ls := p.lessons[taskID]; len(ls) > 0 {
+		var b strings.Builder
+		b.WriteString("过往尝试的经验教训（避免重复同样的过程失误）：")
+		for _, l := range ls {
+			b.WriteString("\n- ")
+			b.WriteString(l)
+		}
+		return b.String(), nil
 	}
-	return b.String(), nil
+	return "", nil
 }
 
-// Observe 仅在【未通过】时调 reflect LLM 蒸出 1-2 句过程经验并 append（通过则跳过，省成本）。
-func (p *Provider) Observe(ctx context.Context, res evaluators.TaskResult, passed bool) error {
-	if passed {
-		return nil
-	}
-	out, _, _, _, err := p.reflectLLM.Call(ctx, buildReflectPrompt(res))
-	if err != nil {
-		return err
-	}
-	if lesson := strings.TrimSpace(out); lesson != "" {
-		p.lessons[res.TaskID] = append(p.lessons[res.TaskID], lesson)
+// Observe 据本任务裁决分流：
+//   - data_correctness 通过、reasoning_quality 未过 → refine-explanation（冻结正确查询，只改进解读，零额外 LLM 调用）；
+//   - data_correctness 未过 → fix-query（自我批判蒸经验，修查询）；
+//   - 全过 → 无需反思。
+func (p *Provider) Observe(ctx context.Context, res evaluators.TaskResult, scores map[string]evaluators.Score) error {
+	dc, hasDC := scores["data_correctness"]
+	rq, hasRQ := scores["reasoning_quality"]
+	switch {
+	case hasDC && dc.Pass && hasRQ && !rq.Pass:
+		p.refine[res.TaskID] = refineHint{queryCalls: res.ToolCalls, feedback: rq.Detail}
+	case hasDC && !dc.Pass:
+		out, _, _, _, err := p.reflectLLM.Call(ctx, buildReflectPrompt(res))
+		if err != nil {
+			return err
+		}
+		if l := strings.TrimSpace(out); l != "" {
+			p.lessons[res.TaskID] = append(p.lessons[res.TaskID], l)
+		}
 	}
 	return nil
 }
 
-// Reset 清空累积经验，供每个独立 reflexion 序列冷起。
-func (p *Provider) Reset() { p.lessons = make(map[string][]string) }
+// Reset 清空所有状态，供每个独立 reflexion 序列冷起。
+func (p *Provider) Reset() {
+	p.lessons = make(map[string][]string)
+	p.refine = make(map[string]refineHint)
+}
+
+// buildRefineContext 注入「复用正确查询 + 只改进解读」的指引，绝不改动查询口径、不编造数值。
+func buildRefineContext(h refineHint) string {
+	var b strings.Builder
+	b.WriteString("你上次对这个问题的【分析查询是正确的】。请用完全相同的工具和参数再执行一次查询，不要改动查询本身；然后把对结果的【解读】写得更完整、更有运营价值。")
+	if len(h.queryCalls) > 0 {
+		b.WriteString("\n上次的正确查询：")
+		for _, c := range h.queryCalls {
+			fmt.Fprintf(&b, "\n- 工具 %s，参数 %v", c.Name, c.Args)
+		}
+	}
+	if strings.TrimSpace(h.feedback) != "" {
+		b.WriteString("\n上次解读被评审指出的不足：" + h.feedback)
+	}
+	b.WriteString("\n本次请补足：关键结论（如集中度/头部效应）、量化对比、针对性运营建议、数据口径或局限 caveat。不要改动查询口径，也不要编造数值。")
+	return b.String()
+}
 
 // buildReflectPrompt 用 agent 自己的轨迹 + 「未通过」构造反思 prompt。
 // 只引用 agent 自身调用与状态码，绝不接触 evaluator 的 golden 期望表。

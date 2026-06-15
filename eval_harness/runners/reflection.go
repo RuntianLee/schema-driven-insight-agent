@@ -18,12 +18,13 @@ type ReflectionProvider interface {
 }
 
 // ReflectionObserver 是 reflection 的【可选】回写接缝（V2 子项 #4）：实现它的
-// ReflectionProvider 会在 agent 跑完某任务、评分后收到自己的轨迹结果 + 二值成败
-// （data_correctness 是否通过），用于蒸出过程经验供后续 trial 注入。
+// ReflectionProvider 会在 agent 跑完某任务、评分后收到自己的轨迹结果 +
+// 本任务全部 evaluator 的逐条裁决（scores），用于区分「查询正确/data_correctness 过、
+// 仅解读弱」与「查询本身错误」，从而分域触发不同反思策略。
 // RunSuite 类型断言调用；未实现者路径字节不变（向后兼容，nil/baseline 不触发）。
 //
-// 关键不变量：res 是 agent 自己的产出（tool 调用 / 状态 / answer），结构性不含
-// evaluator 的 golden 期望表——无泄漏。
+// 关键不变量：res 是 agent 自己的产出（tool 调用 / 状态 / answer），scores 仅含
+// evaluator 自身判定（Pass/Value/Detail），结构性不含 golden 期望原值——无泄漏。
 type ReflectionObserver interface {
-	Observe(ctx context.Context, res evaluators.TaskResult, passed bool) error
+	Observe(ctx context.Context, res evaluators.TaskResult, scores map[string]evaluators.Score) error
 }

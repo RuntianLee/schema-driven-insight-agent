@@ -77,11 +77,11 @@ func (o *recordingObserver) ContextFor(_ context.Context, _, _ string) (string, 
 	return "", nil // 只读侧返回空：不改变 agent 行为，专测回写钩子
 }
 
-func (o *recordingObserver) Observe(_ context.Context, res evaluators.TaskResult, passed bool) error {
+func (o *recordingObserver) Observe(_ context.Context, res evaluators.TaskResult, scores map[string]evaluators.Score) error {
 	o.observed = append(o.observed, struct {
 		taskID string
 		passed bool
-	}{res.TaskID, passed})
+	}{res.TaskID, scores["data_correctness"].Pass})
 	return nil
 }
 

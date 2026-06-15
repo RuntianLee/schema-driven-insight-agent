@@ -66,8 +66,8 @@ func (p *learningProvider) ContextFor(_ context.Context, _, _ string) (string, e
 	return "", nil
 }
 
-func (p *learningProvider) Observe(_ context.Context, _ evaluators.TaskResult, passed bool) error {
-	if !passed {
+func (p *learningProvider) Observe(_ context.Context, _ evaluators.TaskResult, scores map[string]evaluators.Score) error {
+	if dc, ok := scores["data_correctness"]; ok && !dc.Pass {
 		p.learned = true
 	}
 	return nil
