@@ -67,6 +67,41 @@ func TestMigrateFTSCanSearchInsertedContent(t *testing.T) {
 	}
 }
 
+func TestMigrateAllowsOptionalFields(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = db.Exec(`
+		INSERT INTO memory_items
+			(item_id, source_type, source_id, adapter, question, summary,
+			 tools_json, tags_json, score, created_at, updated_at)
+		VALUES
+			('m2', 'manual', 'n2', 'b3', '可选字段测试',
+			 '可选字段为空时也需要进入全文索引。', '[]', '[]', 0.5, 101, 101)`)
+	if err != nil {
+		t.Fatalf("insert memory item with optional fields: %v", err)
+	}
+
+	var id string
+	err = db.QueryRow(`
+		SELECT memory_items.item_id
+		FROM memory_items_fts
+		JOIN memory_items ON memory_items_fts.rowid = memory_items.rowid
+		WHERE memory_items_fts MATCH '可选'`).Scan(&id)
+	if err != nil {
+		t.Fatalf("fts search optional item: %v", err)
+	}
+	if id != "m2" {
+		t.Fatalf("id=%q want m2", id)
+	}
+}
+
 func assertTableExists(t *testing.T, db *sql.DB, name string) {
 	t.Helper()
 	var got string

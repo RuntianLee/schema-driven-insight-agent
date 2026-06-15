@@ -4,11 +4,11 @@ CREATE TABLE IF NOT EXISTS memory_items (
 	source_type TEXT NOT NULL CHECK (source_type IN ('trajectory', 'eval', 'manual')),
 	source_id TEXT,
 	adapter TEXT NOT NULL,
-	task_id TEXT NOT NULL,
-	task_class TEXT NOT NULL,
+	task_id TEXT,
+	task_class TEXT,
 	question TEXT NOT NULL,
 	summary TEXT NOT NULL,
-	answer_outline TEXT NOT NULL,
+	answer_outline TEXT,
 	tools_json TEXT NOT NULL DEFAULT '[]',
 	tags_json TEXT NOT NULL DEFAULT '[]',
 	score REAL NOT NULL DEFAULT 0,
@@ -56,9 +56,9 @@ CREATE TRIGGER IF NOT EXISTS memory_items_ai AFTER INSERT ON memory_items BEGIN
 			SELECT i + 1, substr(new.summary, i + 1, 2) FROM s WHERE i < length(new.summary) - 1
 		),
 		a(i, token) AS (
-			SELECT 1, substr(new.answer_outline, 1, 2)
+			SELECT 1, substr(COALESCE(new.answer_outline, ''), 1, 2)
 			UNION ALL
-			SELECT i + 1, substr(new.answer_outline, i + 1, 2) FROM a WHERE i < length(new.answer_outline) - 1
+			SELECT i + 1, substr(COALESCE(new.answer_outline, ''), i + 1, 2) FROM a WHERE i < length(COALESCE(new.answer_outline, '')) - 1
 		),
 		tl(i, token) AS (
 			SELECT 1, substr(new.tools_json, 1, 2)
@@ -74,7 +74,7 @@ CREATE TRIGGER IF NOT EXISTS memory_items_ai AFTER INSERT ON memory_items BEGIN
 		new.rowid,
 		new.question || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM q WHERE length(token) = 2), ''),
 		new.summary || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM s WHERE length(token) = 2), ''),
-		new.answer_outline || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM a WHERE length(token) = 2), ''),
+		COALESCE(new.answer_outline, '') || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM a WHERE length(token) = 2), ''),
 		new.tools_json || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM tl WHERE length(token) = 2), ''),
 		new.tags_json || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM tg WHERE length(token) = 2), '');
 END;
@@ -93,9 +93,9 @@ CREATE TRIGGER IF NOT EXISTS memory_items_ad AFTER DELETE ON memory_items BEGIN
 			SELECT i + 1, substr(old.summary, i + 1, 2) FROM s WHERE i < length(old.summary) - 1
 		),
 		a(i, token) AS (
-			SELECT 1, substr(old.answer_outline, 1, 2)
+			SELECT 1, substr(COALESCE(old.answer_outline, ''), 1, 2)
 			UNION ALL
-			SELECT i + 1, substr(old.answer_outline, i + 1, 2) FROM a WHERE i < length(old.answer_outline) - 1
+			SELECT i + 1, substr(COALESCE(old.answer_outline, ''), i + 1, 2) FROM a WHERE i < length(COALESCE(old.answer_outline, '')) - 1
 		),
 		tl(i, token) AS (
 			SELECT 1, substr(old.tools_json, 1, 2)
@@ -112,7 +112,7 @@ CREATE TRIGGER IF NOT EXISTS memory_items_ad AFTER DELETE ON memory_items BEGIN
 		old.rowid,
 		old.question || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM q WHERE length(token) = 2), ''),
 		old.summary || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM s WHERE length(token) = 2), ''),
-		old.answer_outline || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM a WHERE length(token) = 2), ''),
+		COALESCE(old.answer_outline, '') || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM a WHERE length(token) = 2), ''),
 		old.tools_json || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM tl WHERE length(token) = 2), ''),
 		old.tags_json || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM tg WHERE length(token) = 2), '');
 END;
@@ -131,9 +131,9 @@ CREATE TRIGGER IF NOT EXISTS memory_items_au AFTER UPDATE ON memory_items BEGIN
 			SELECT i + 1, substr(old.summary, i + 1, 2) FROM s WHERE i < length(old.summary) - 1
 		),
 		a(i, token) AS (
-			SELECT 1, substr(old.answer_outline, 1, 2)
+			SELECT 1, substr(COALESCE(old.answer_outline, ''), 1, 2)
 			UNION ALL
-			SELECT i + 1, substr(old.answer_outline, i + 1, 2) FROM a WHERE i < length(old.answer_outline) - 1
+			SELECT i + 1, substr(COALESCE(old.answer_outline, ''), i + 1, 2) FROM a WHERE i < length(COALESCE(old.answer_outline, '')) - 1
 		),
 		tl(i, token) AS (
 			SELECT 1, substr(old.tools_json, 1, 2)
@@ -150,7 +150,7 @@ CREATE TRIGGER IF NOT EXISTS memory_items_au AFTER UPDATE ON memory_items BEGIN
 		old.rowid,
 		old.question || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM q WHERE length(token) = 2), ''),
 		old.summary || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM s WHERE length(token) = 2), ''),
-		old.answer_outline || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM a WHERE length(token) = 2), ''),
+		COALESCE(old.answer_outline, '') || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM a WHERE length(token) = 2), ''),
 		old.tools_json || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM tl WHERE length(token) = 2), ''),
 		old.tags_json || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM tg WHERE length(token) = 2), '');
 	INSERT INTO memory_items_fts(rowid, question, summary, answer_outline, tools, tags)
@@ -166,9 +166,9 @@ CREATE TRIGGER IF NOT EXISTS memory_items_au AFTER UPDATE ON memory_items BEGIN
 			SELECT i + 1, substr(new.summary, i + 1, 2) FROM s WHERE i < length(new.summary) - 1
 		),
 		a(i, token) AS (
-			SELECT 1, substr(new.answer_outline, 1, 2)
+			SELECT 1, substr(COALESCE(new.answer_outline, ''), 1, 2)
 			UNION ALL
-			SELECT i + 1, substr(new.answer_outline, i + 1, 2) FROM a WHERE i < length(new.answer_outline) - 1
+			SELECT i + 1, substr(COALESCE(new.answer_outline, ''), i + 1, 2) FROM a WHERE i < length(COALESCE(new.answer_outline, '')) - 1
 		),
 		tl(i, token) AS (
 			SELECT 1, substr(new.tools_json, 1, 2)
@@ -184,7 +184,7 @@ CREATE TRIGGER IF NOT EXISTS memory_items_au AFTER UPDATE ON memory_items BEGIN
 		new.rowid,
 		new.question || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM q WHERE length(token) = 2), ''),
 		new.summary || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM s WHERE length(token) = 2), ''),
-		new.answer_outline || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM a WHERE length(token) = 2), ''),
+		COALESCE(new.answer_outline, '') || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM a WHERE length(token) = 2), ''),
 		new.tools_json || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM tl WHERE length(token) = 2), ''),
 		new.tags_json || ' ' || COALESCE((SELECT group_concat(token, ' ') FROM tg WHERE length(token) = 2), '');
 END;
