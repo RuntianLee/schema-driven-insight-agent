@@ -101,6 +101,32 @@ func TestProvider_PromptHasNoGolden(t *testing.T) {
 	}
 }
 
+func TestProvider_NoRefine_WhenReasoningOK(t *testing.T) {
+	llm := &fakeReflectLLM{out: "不该被调用"}
+	p := New(llm)
+	res := evaluators.TaskResult{
+		TaskID:    "t1",
+		Question:  "各服玩家数？",
+		Answer:    "（解读已充分）",
+		ToolCalls: []evaluators.ToolCall{{Name: "analyze", Args: map[string]any{"group_by": []any{"server_id"}}}},
+	}
+	// data_correctness 通过、reasoning_quality 未低于阈值（BelowMin=false）→ 不应进 refine 模式
+	scores := map[string]evaluators.Score{
+		"data_correctness":  {Pass: true},
+		"reasoning_quality": {BelowMin: false, Detail: "解读充分"},
+	}
+	if err := p.Observe(context.Background(), res, scores); err != nil {
+		t.Fatal(err)
+	}
+	if llm.calls != 0 {
+		t.Fatalf("不应调 reflect LLM，得 %d 次", llm.calls)
+	}
+	got, _ := p.ContextFor(context.Background(), "t1", "各服玩家数？")
+	if got != "" {
+		t.Fatalf("reasoning 达标时不应注入 refine 上下文，得 %q", got)
+	}
+}
+
 func TestProvider_RefineMode_QueryCorrectReasoningWeak(t *testing.T) {
 	llm := &fakeReflectLLM{out: "不该被调用"}
 	p := New(llm)
@@ -112,10 +138,10 @@ func TestProvider_RefineMode_QueryCorrectReasoningWeak(t *testing.T) {
 			{Name: "analyze", Args: map[string]any{"group_by": []any{"server_id"}}},
 		},
 	}
-	// data_correctness 通过、reasoning_quality 未过 → refine-explanation 模式
+	// data_correctness 通过、reasoning_quality 低于阈值（BelowMin=true）→ refine-explanation 模式
 	scores := map[string]evaluators.Score{
 		"data_correctness":  {Pass: true},
-		"reasoning_quality": {Pass: false, Detail: "未给运营含义"},
+		"reasoning_quality": {BelowMin: true, Detail: "未给运营含义"},
 	}
 	if err := p.Observe(context.Background(), res, scores); err != nil {
 		t.Fatal(err)

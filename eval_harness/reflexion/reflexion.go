@@ -67,7 +67,7 @@ func (p *Provider) Observe(ctx context.Context, res evaluators.TaskResult, score
 	dc, hasDC := scores["data_correctness"]
 	rq, hasRQ := scores["reasoning_quality"]
 	switch {
-	case hasDC && dc.Pass && hasRQ && !rq.Pass:
+	case hasDC && dc.Pass && hasRQ && rq.BelowMin:
 		p.refine[res.TaskID] = refineHint{queryCalls: res.ToolCalls, feedback: rq.Detail}
 	case hasDC && !dc.Pass:
 		out, _, _, _, err := p.reflectLLM.Call(ctx, buildReflectPrompt(res))

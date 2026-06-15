@@ -79,3 +79,39 @@ func TestJudgeScoreOutOfRange(t *testing.T) {
 		}
 	}
 }
+
+func TestJudgeBelowMin(t *testing.T) {
+	// mock judge 恒返 score=3
+	// min_score: 4 → 3 < 4 → BelowMin 应为 true
+	e := NewReasoningQuality(NewMockJudge())
+	s, err := e.Evaluate(context.Background(), TaskResult{Answer: "x"}, specNode(t, `rubric: "r"
+min_score: 4`))
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if !s.BelowMin {
+		t.Fatalf("score 3 < min_score 4，BelowMin 应为 true，得 %+v", s)
+	}
+
+	// min_score: 3 → 3 不低于 3 → BelowMin 应为 false
+	s2, err := e.Evaluate(context.Background(), TaskResult{Answer: "x"}, specNode(t, `rubric: "r"
+min_score: 3`))
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if s2.BelowMin {
+		t.Fatalf("score 3 = min_score 3，BelowMin 应为 false，得 %+v", s2)
+	}
+}
+
+func TestJudgeParseFail_BelowMinTrue(t *testing.T) {
+	// 解析失败 → BelowMin 应为 true（无法评分视为未达标）
+	e := NewReasoningQuality(constJudge("not json"))
+	s, err := e.Evaluate(context.Background(), TaskResult{Answer: "x"}, specNode(t, `rubric: "r"`))
+	if err != nil {
+		t.Fatalf("malformed json must not error the suite: %v", err)
+	}
+	if !s.BelowMin {
+		t.Fatalf("解析失败应设 BelowMin=true，得 %+v", s)
+	}
+}
