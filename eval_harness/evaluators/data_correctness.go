@@ -26,8 +26,9 @@ type dcGroup struct {
 }
 
 type dcTableRow struct {
-	Match  map[string]string  `yaml:"match"`
-	Expect map[string]float64 `yaml:"expect"`
+	Match     map[string]string  `yaml:"match"`
+	Expect    map[string]float64 `yaml:"expect"`     // 按列名（别名）断言：确定性 mock 道用
+	ExpectPos map[int]float64    `yaml:"expect_pos"` // 按列绝对位置断言：真 LLM 道别名鲁棒（agent 自选 as 别名时仍可比对）
 }
 
 type dcSpec struct {
@@ -220,7 +221,7 @@ func checkTable(tr *contract.TableResult, want dcTableRow) []string {
 	}
 	for _, row := range tr.Rows {
 		if tableRowMatches(row, idx, want.Match) {
-			return checkTableExpect(row, idx, want.Match, want.Expect)
+			return checkTableExpect(row, idx, want.Match, want.Expect, want.ExpectPos)
 		}
 	}
 	return []string{fmt.Sprintf("未找到匹配行 %v", want.Match)}
@@ -236,7 +237,7 @@ func tableRowMatches(row []any, idx map[string]int, match map[string]string) boo
 	return true
 }
 
-func checkTableExpect(row []any, idx map[string]int, match map[string]string, expect map[string]float64) []string {
+func checkTableExpect(row []any, idx map[string]int, match map[string]string, expect map[string]float64, expectPos map[int]float64) []string {
 	var fails []string
 	for k, v := range expect {
 		i, ok := idx[k]
@@ -251,6 +252,20 @@ func checkTableExpect(row []any, idx map[string]int, match map[string]string, ex
 		}
 		if !floatEq(got, v) {
 			fails = append(fails, fmt.Sprintf("table%v.%s=%g want %g", match, k, got, v))
+		}
+	}
+	for i, v := range expectPos {
+		if i < 0 || i >= len(row) {
+			fails = append(fails, fmt.Sprintf("table%v.[col %d] 列越界（共 %d 列）", match, i, len(row)))
+			continue
+		}
+		got, ok := cellToFloat(row[i])
+		if !ok {
+			fails = append(fails, fmt.Sprintf("table%v.[col %d] 非数值", match, i))
+			continue
+		}
+		if !floatEq(got, v) {
+			fails = append(fails, fmt.Sprintf("table%v.[col %d]=%g want %g", match, i, got, v))
 		}
 	}
 	return fails
