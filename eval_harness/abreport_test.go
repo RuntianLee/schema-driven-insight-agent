@@ -14,6 +14,14 @@ func repWith(taskID string, pass bool) *Report {
 	r.Add(taskID, evaluators.Score{Evaluator: "reasoning_quality", Value: 0.6, Pass: false}, false)
 	return r
 }
+
+// repWithJudge 构造一个单任务 Report，reasoning_quality Value 可自定（data_correctness 固定通过）。
+func repWithJudge(taskID string, judgeVal float64) *Report {
+	r := NewReport([]string{"data_correctness", "reasoning_quality"})
+	r.Add(taskID, evaluators.Score{Evaluator: "data_correctness", Value: 1, Pass: true}, true)
+	r.Add(taskID, evaluators.Score{Evaluator: "reasoning_quality", Value: judgeVal, Pass: judgeVal >= 0.6}, false)
+	return r
+}
 func b2f(b bool) float64 {
 	if b {
 		return 1
@@ -78,5 +86,29 @@ func TestBuildABReport_SingleRun_BAboveA_NoCaveat(t *testing.T) {
 func TestBuildABReport_LenMismatch(t *testing.T) {
 	if _, err := BuildABReport("a", "b", 2, []*Report{repWith("t1", true)}, nil); err == nil {
 		t.Fatal("runs 与报告数不符应报错")
+	}
+}
+
+// TestBuildABReport_JudgeDelta 验证 MeanJudgeDelta 与 Meets20PctJudge 正确聚合：
+// config B 的 reasoning_quality Value 比 A 高 ≥0.20，应触发 Meets20PctJudge=true。
+func TestBuildABReport_JudgeDelta(t *testing.T) {
+	// A: judgeVal=0.40；B: judgeVal=0.80 → delta=0.40 ≥ 0.20
+	aReports := []*Report{repWithJudge("t1", 0.40), repWithJudge("t1", 0.40)}
+	bReports := []*Report{repWithJudge("t1", 0.80), repWithJudge("t1", 0.80)}
+	ab, err := BuildABReport("baseline", "reflection", 2, aReports, bReports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ab.MeanJudgeA != 0.40 {
+		t.Fatalf("MeanJudgeA want 0.40, got %g", ab.MeanJudgeA)
+	}
+	if ab.MeanJudgeB != 0.80 {
+		t.Fatalf("MeanJudgeB want 0.80, got %g", ab.MeanJudgeB)
+	}
+	if ab.MeanJudgeDelta <= 0 {
+		t.Fatalf("MeanJudgeDelta should be >0, got %g", ab.MeanJudgeDelta)
+	}
+	if !ab.Meets20PctJudge {
+		t.Fatalf("Meets20PctJudge should be true for delta=%g", ab.MeanJudgeDelta)
 	}
 }

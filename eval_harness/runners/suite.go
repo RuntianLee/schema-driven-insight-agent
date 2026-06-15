@@ -80,6 +80,7 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		}
 
 		var dcPassed, dcSeen bool
+		rqPassed := true // 无 reasoning_quality 评估器时默认通过，不因缺席误触发反思
 		for _, name := range cfg.EvalOrder {
 			spec, hasSpec := task.Evaluators[name]
 			if !hasSpec {
@@ -97,9 +98,12 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 					Display: "ERR", Detail: err.Error()}
 			}
 			rep.Add(task.ID, score, e.Deterministic())
-			if name == "data_correctness" {
+			switch name {
+			case "data_correctness":
 				dcPassed = score.Pass
 				dcSeen = true
+			case "reasoning_quality":
+				rqPassed = score.Pass
 			}
 			if cfg.TrajDB != nil && trajID != "" {
 				persistVerdict(cfg.TrajDB, trajID, task.ID, score)
@@ -108,9 +112,9 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		// reflection 回写接缝（#4）：provider 实现 ReflectionObserver 则喂自身轨迹 + 二值成败。
 		// 失败仅吞——同 persistVerdict，绝不干扰评测主流程。
 		// nil / 非-Observer provider 不触发（确定性 gate 字节不变）。
-		// 仅在本任务确有 data_correctness 裁决时回写（无 data_correctness 的套件不喂错误的 passed=false）。
+		// 整体达标 = 正确性 + 推理质量均过；任一弱 → 触发反思（覆盖 data_correctness 已满、靠推理质量找 headroom 的场景）。
 		if obs, ok := cfg.ReflectionProvider.(ReflectionObserver); ok && dcSeen {
-			_ = obs.Observe(ctx, res, dcPassed)
+			_ = obs.Observe(ctx, res, dcPassed && rqPassed)
 		}
 	}
 	return rep, nil

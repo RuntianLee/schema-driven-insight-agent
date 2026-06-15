@@ -32,8 +32,12 @@ type ABReport struct {
 	MaxSuiteA     float64       `json:"max_suite_a"`
 	MinSuiteB     float64       `json:"min_suite_b"`
 	MaxSuiteB     float64       `json:"max_suite_b"`
-	Meets20Pct    bool          `json:"meets_20pct"`
-	Caveat        string        `json:"caveat,omitempty"`
+	Meets20Pct      bool          `json:"meets_20pct"`
+	MeanJudgeA      float64       `json:"mean_judge_a"`
+	MeanJudgeB      float64       `json:"mean_judge_b"`
+	MeanJudgeDelta  float64       `json:"mean_judge_delta"`
+	Meets20PctJudge bool          `json:"meets_20pct_judge"`
+	Caveat          string        `json:"caveat,omitempty"`
 }
 
 const dcEval = "data_correctness"
@@ -69,6 +73,18 @@ func BuildABReport(labelA, labelB string, runs int, aReports, bReports []*Report
 	}
 	ab.MeanDelta = ab.MeanPassRateB - ab.MeanPassRateA
 	ab.Meets20Pct = ab.MeanDelta >= 0.20
+
+	var sumJA, sumJB float64
+	for _, t := range ab.Tasks {
+		sumJA += t.JudgeA
+		sumJB += t.JudgeB
+	}
+	if n > 0 {
+		ab.MeanJudgeA = sumJA / n
+		ab.MeanJudgeB = sumJB / n
+	}
+	ab.MeanJudgeDelta = ab.MeanJudgeB - ab.MeanJudgeA
+	ab.Meets20PctJudge = ab.MeanJudgeDelta >= 0.20
 
 	ab.MinSuiteA, ab.MaxSuiteA = suiteRange(aReports, taskIDs)
 	ab.MinSuiteB, ab.MaxSuiteB = suiteRange(bReports, taskIDs)
@@ -141,6 +157,8 @@ func (r *ABReport) ConsoleTable() string {
 	}
 	fmt.Fprintf(&b, "MEAN\t%.2f\t%.2f\t%+.2f  (≥20%%: %v)\n",
 		r.MeanPassRateA, r.MeanPassRateB, r.MeanDelta, r.Meets20Pct)
+	fmt.Fprintf(&b, "MEAN judge(reasoning)\t%.2f\t%.2f\t%+.2f  (≥0.20: %v)\n",
+		r.MeanJudgeA, r.MeanJudgeB, r.MeanJudgeDelta, r.Meets20PctJudge)
 	if r.Caveat != "" {
 		b.WriteString("CAVEAT: " + r.Caveat + "\n")
 	}
