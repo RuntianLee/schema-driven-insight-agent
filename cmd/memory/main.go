@@ -46,13 +46,14 @@ func run(args []string, out io.Writer) int {
 		fmt.Fprintf(out, "open memory db: %v\n", err)
 		return 1
 	}
-	store := memory.NewSQLiteStore(db)
-	defer store.Close()
-
 	if err := memory.Migrate(db); err != nil {
+		db.Close()
 		fmt.Fprintf(out, "migrate memory db: %v\n", err)
 		return 1
 	}
+	store := memory.NewSQLiteStore(db)
+	defer store.Close()
+
 	if *initDB {
 		fmt.Fprintf(out, "initialized %s\n", *memoryDB)
 	}
