@@ -79,7 +79,7 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 			RunErr:    runErr,
 		}
 
-		var dcPassed bool
+		var dcPassed, dcSeen bool
 		for _, name := range cfg.EvalOrder {
 			spec, hasSpec := task.Evaluators[name]
 			if !hasSpec {
@@ -99,6 +99,7 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 			rep.Add(task.ID, score, e.Deterministic())
 			if name == "data_correctness" {
 				dcPassed = score.Pass
+				dcSeen = true
 			}
 			if cfg.TrajDB != nil && trajID != "" {
 				persistVerdict(cfg.TrajDB, trajID, task.ID, score)
@@ -107,7 +108,8 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		// reflection 回写接缝（#4）：provider 实现 ReflectionObserver 则喂自身轨迹 + 二值成败。
 		// 失败仅吞——同 persistVerdict，绝不干扰评测主流程。
 		// nil / 非-Observer provider 不触发（确定性 gate 字节不变）。
-		if obs, ok := cfg.ReflectionProvider.(ReflectionObserver); ok {
+		// 仅在本任务确有 data_correctness 裁决时回写（无 data_correctness 的套件不喂错误的 passed=false）。
+		if obs, ok := cfg.ReflectionProvider.(ReflectionObserver); ok && dcSeen {
 			_ = obs.Observe(ctx, res, dcPassed)
 		}
 	}
