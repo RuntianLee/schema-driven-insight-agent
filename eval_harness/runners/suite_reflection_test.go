@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
 )
 
 // recordingProvider 记录被调用并返回固定上下文。
@@ -60,5 +62,53 @@ func TestApplyReflection_ProviderError_ReturnsQuestionUnchanged(t *testing.T) {
 	got := applyReflection(context.Background(), errProvider{}, "t1", "原问题")
 	if got != "原问题" {
 		t.Fatalf("provider 报错应原样返回 question（含丢弃错误返回的串），得 %q", got)
+	}
+}
+
+// recordingObserver 同时实现 ReflectionProvider（只读，返回空=不注入）与 ReflectionObserver。
+type recordingObserver struct {
+	observed []struct {
+		taskID string
+		passed bool
+	}
+}
+
+func (o *recordingObserver) ContextFor(_ context.Context, _, _ string) (string, error) {
+	return "", nil // 只读侧返回空：不改变 agent 行为，专测回写钩子
+}
+
+func (o *recordingObserver) Observe(_ context.Context, res evaluators.TaskResult, passed bool) error {
+	o.observed = append(o.observed, struct {
+		taskID string
+		passed bool
+	}{res.TaskID, passed})
+	return nil
+}
+
+func TestRunSuite_ObserverHook_CalledOncePerTaskWithPass(t *testing.T) {
+	cfg := newTestConfig(t)
+	obs := &recordingObserver{}
+	cfg.ReflectionProvider = obs
+
+	if _, err := RunSuite(context.Background(), cfg); err != nil {
+		t.Fatalf("RunSuite: %v", err)
+	}
+	if len(obs.observed) != 1 {
+		t.Fatalf("Observe 应每任务调一次，得 %d 次", len(obs.observed))
+	}
+	if obs.observed[0].taskID != "level_dist" {
+		t.Fatalf("Observe taskID 应为 level_dist，得 %q", obs.observed[0].taskID)
+	}
+	if !obs.observed[0].passed {
+		t.Fatalf("level_dist 任务 data_correctness 应通过，Observe passed 应为 true")
+	}
+}
+
+func TestRunSuite_ReadOnlyProvider_NotObserved(t *testing.T) {
+	// 只读 provider（不实现 ReflectionObserver）：RunSuite 正常跑完，不 panic、不触发回写。
+	cfg := newTestConfig(t)
+	cfg.ReflectionProvider = emptyProvider{} // 已在本文件定义，仅实现 ContextFor
+	if _, err := RunSuite(context.Background(), cfg); err != nil {
+		t.Fatalf("只读 provider 下 RunSuite 应正常: %v", err)
 	}
 }
