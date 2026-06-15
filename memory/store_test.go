@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -124,6 +125,88 @@ func TestStoreUpsertBySourceIsIdempotent(t *testing.T) {
 	}
 	if results[0].Item.Score != 0.8 {
 		t.Fatalf("score=%v want 0.8", results[0].Item.Score)
+	}
+}
+
+func TestStoreUpsertBySourceConcurrent(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	const workers = 16
+	start := make(chan struct{})
+	ids := make(chan string, workers)
+	errs := make(chan error, workers)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			id, err := store.Upsert(ctx, Item{
+				SourceType: "trajectory",
+				SourceID:   "traj-concurrent",
+				Adapter:    "b3",
+				TaskID:     "retention",
+				Question:   "concurrent whale retention query",
+				Summary:    "concurrent whale retention summary",
+				Tools:      []string{"analyze"},
+				Tags:       []string{"retention"},
+				Score:      0.8,
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			ids <- id
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(ids)
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent upsert failed: %v", err)
+		}
+	}
+	var first string
+	seen := 0
+	for id := range ids {
+		seen++
+		if id == "" {
+			t.Fatal("concurrent upsert returned empty id")
+		}
+		if first == "" {
+			first = id
+			continue
+		}
+		if id != first {
+			t.Fatalf("id=%q want %q", id, first)
+		}
+	}
+	if seen != workers {
+		t.Fatalf("saw %d ids want %d", seen, workers)
+	}
+
+	var count int
+	err := store.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM memory_items WHERE source_type = 'trajectory' AND source_id = 'traj-concurrent'`,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("count source rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("source row count=%d want 1", count)
+	}
+
+	results, err := store.Search(ctx, Query{Adapter: "b3", Question: "concurrent retention", Limit: 3})
+	if err != nil {
+		t.Fatalf("search concurrent item: %v", err)
+	}
+	if len(results) != 1 || results[0].Item.ID != first {
+		t.Fatalf("unexpected concurrent result: %#v want id %q", results, first)
 	}
 }
 

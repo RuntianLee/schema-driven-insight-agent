@@ -20,6 +20,11 @@ type SQLiteStore struct {
 
 // NewSQLiteStore wraps an opened and migrated SQLite database.
 func NewSQLiteStore(db *sql.DB) *SQLiteStore {
+	if db != nil {
+		// Memory writes are small and local. A single connection avoids SQLITE_BUSY
+		// during concurrent source upserts while preserving WAL read behavior.
+		db.SetMaxOpenConns(1)
+	}
 	return &SQLiteStore{db: db}
 }
 
@@ -33,6 +38,7 @@ func (s *SQLiteStore) Upsert(ctx context.Context, item Item) (string, error) {
 	if err := validateItem(item); err != nil {
 		return "", err
 	}
+	hadID := item.ID != ""
 	if item.ID == "" {
 		item.ID = uuid.NewString()
 	}
@@ -50,74 +56,92 @@ func (s *SQLiteStore) Upsert(ctx context.Context, item Item) (string, error) {
 	}
 
 	now := time.Now().Unix()
-	tx, err := s.db.BeginTx(ctx, nil)
+	if !hadID && item.SourceID != "" {
+		return s.upsertBySource(ctx, item, string(toolsJSON), string(tagsJSON), now)
+	}
+	return s.upsertByItemID(ctx, item, string(toolsJSON), string(tagsJSON), now)
+}
+
+func (s *SQLiteStore) upsertBySource(ctx context.Context, item Item, toolsJSON, tagsJSON string, now int64) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO memory_items
+			(item_id, source_type, source_id, adapter, task_id, task_class, question,
+			 summary, answer_outline, tools_json, tags_json, score, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(source_type, source_id) WHERE source_id IS NOT NULL DO UPDATE SET
+			adapter = excluded.adapter,
+			task_id = excluded.task_id,
+			task_class = excluded.task_class,
+			question = excluded.question,
+			summary = excluded.summary,
+			answer_outline = excluded.answer_outline,
+			tools_json = excluded.tools_json,
+			tags_json = excluded.tags_json,
+			score = excluded.score,
+			updated_at = excluded.updated_at
+		RETURNING item_id`,
+		item.ID,
+		item.SourceType,
+		item.SourceID,
+		item.Adapter,
+		nullIfEmpty(item.TaskID),
+		nullIfEmpty(item.TaskClass),
+		item.Question,
+		item.Summary,
+		nullIfEmpty(item.AnswerOutline),
+		toolsJSON,
+		tagsJSON,
+		item.Score,
+		now,
+		now,
+	).Scan(&id)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("upsert memory source: %w", err)
 	}
-	defer tx.Rollback()
+	return id, nil
+}
 
-	if item.SourceID != "" {
-		var existingID string
-		err = tx.QueryRowContext(ctx, `
-			SELECT item_id
-			FROM memory_items
-			WHERE source_type = ? AND source_id = ?`,
-			item.SourceType, item.SourceID,
-		).Scan(&existingID)
-		switch {
-		case err == nil:
-			item.ID = existingID
-			if err := updateItem(ctx, tx, item, string(toolsJSON), string(tagsJSON), now); err != nil {
-				return "", err
-			}
-			if err := tx.Commit(); err != nil {
-				return "", err
-			}
-			return item.ID, nil
-		case err != sql.ErrNoRows:
-			return "", fmt.Errorf("lookup memory source: %w", err)
-		}
+func (s *SQLiteStore) upsertByItemID(ctx context.Context, item Item, toolsJSON, tagsJSON string, now int64) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO memory_items
+			(item_id, source_type, source_id, adapter, task_id, task_class, question,
+			 summary, answer_outline, tools_json, tags_json, score, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(item_id) DO UPDATE SET
+			source_type = excluded.source_type,
+			source_id = excluded.source_id,
+			adapter = excluded.adapter,
+			task_id = excluded.task_id,
+			task_class = excluded.task_class,
+			question = excluded.question,
+			summary = excluded.summary,
+			answer_outline = excluded.answer_outline,
+			tools_json = excluded.tools_json,
+			tags_json = excluded.tags_json,
+			score = excluded.score,
+			updated_at = excluded.updated_at
+		RETURNING item_id`,
+		item.ID,
+		item.SourceType,
+		nullIfEmpty(item.SourceID),
+		item.Adapter,
+		nullIfEmpty(item.TaskID),
+		nullIfEmpty(item.TaskClass),
+		item.Question,
+		item.Summary,
+		nullIfEmpty(item.AnswerOutline),
+		toolsJSON,
+		tagsJSON,
+		item.Score,
+		now,
+		now,
+	).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("upsert memory item: %w", err)
 	}
-
-	var existingRowID int64
-	err = tx.QueryRowContext(ctx, `SELECT rowid FROM memory_items WHERE item_id = ?`, item.ID).Scan(&existingRowID)
-	switch {
-	case err == nil:
-		if err := updateItem(ctx, tx, item, string(toolsJSON), string(tagsJSON), now); err != nil {
-			return "", err
-		}
-	case err == sql.ErrNoRows:
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO memory_items
-				(item_id, source_type, source_id, adapter, task_id, task_class, question,
-				 summary, answer_outline, tools_json, tags_json, score, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			item.ID,
-			item.SourceType,
-			nullIfEmpty(item.SourceID),
-			item.Adapter,
-			nullIfEmpty(item.TaskID),
-			nullIfEmpty(item.TaskClass),
-			item.Question,
-			item.Summary,
-			nullIfEmpty(item.AnswerOutline),
-			string(toolsJSON),
-			string(tagsJSON),
-			item.Score,
-			now,
-			now,
-		)
-		if err != nil {
-			return "", fmt.Errorf("insert memory item: %w", err)
-		}
-	default:
-		return "", fmt.Errorf("lookup memory item: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
-	return item.ID, nil
+	return id, nil
 }
 
 // Search returns FTS-ranked memory items matching the query and structured filters.
@@ -286,42 +310,6 @@ func (s *SQLiteStore) Close() error {
 		return nil
 	}
 	return s.db.Close()
-}
-
-func updateItem(ctx context.Context, tx *sql.Tx, item Item, toolsJSON, tagsJSON string, now int64) error {
-	_, err := tx.ExecContext(ctx, `
-		UPDATE memory_items
-		SET source_type = ?,
-			source_id = ?,
-			adapter = ?,
-			task_id = ?,
-			task_class = ?,
-			question = ?,
-			summary = ?,
-			answer_outline = ?,
-			tools_json = ?,
-			tags_json = ?,
-			score = ?,
-			updated_at = ?
-		WHERE item_id = ?`,
-		item.SourceType,
-		nullIfEmpty(item.SourceID),
-		item.Adapter,
-		nullIfEmpty(item.TaskID),
-		nullIfEmpty(item.TaskClass),
-		item.Question,
-		item.Summary,
-		nullIfEmpty(item.AnswerOutline),
-		toolsJSON,
-		tagsJSON,
-		item.Score,
-		now,
-		item.ID,
-	)
-	if err != nil {
-		return fmt.Errorf("update memory item: %w", err)
-	}
-	return nil
 }
 
 func validateItem(item Item) error {
