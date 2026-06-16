@@ -58,7 +58,7 @@ func (j *judgeEvaluator) Evaluate(ctx context.Context, res TaskResult, spec *yam
 			Pass:      false,
 			Errored:   true,
 			Display:   "ERR",
-			Detail:    fmt.Sprintf("judge 调用失败（已重试 %d 次）: %v", judgeMaxAttempts, callErr),
+			Detail:    fmt.Sprintf("judge 调用失败（已重试 %d 次）: %v", judgeMaxAttempts-1, callErr),
 		}, nil
 	}
 

@@ -52,6 +52,9 @@ func TestJudge_ExhaustedRetriesMarksErrored(t *testing.T) {
 	if s.Value != 0 || s.Pass {
 		t.Fatalf("errored score 应 Value=0/Pass=false, got %+v", s)
 	}
+	if s.BelowMin {
+		t.Fatalf("errored score 的 BelowMin 应为 false（调用失败是不确定，不等同于评分低）, got %+v", s)
+	}
 }
 
 func TestMockJudgeReturnsPlaceholder(t *testing.T) {
