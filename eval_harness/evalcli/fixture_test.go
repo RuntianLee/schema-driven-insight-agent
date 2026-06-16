@@ -26,6 +26,32 @@ state_tables:
       last_online_time: {type: unix_timestamp_seconds, role: last_seen}
 `
 
+const fxSchemaWithDerived = `
+version: 1
+domain: t
+state_tables:
+  player_basics:
+    nature: snapshot
+    primary_key: [player_id]
+    fields:
+      player_id:     {type: int64, role: actor_id, pk: true, pii: true}
+      server_id:     {type: int32, role: dimension}
+      basic_money:   {type: int64, role: balance, currency_type: basic}
+      virtual_money: {type: int64, role: balance, currency_type: virtual}
+derived_tables:
+  player_currencies:
+    derived_from: player_basics
+    method: pivot_money_columns
+    schema:
+      player_id:     {type: int64, role: actor_id}
+      currency_type: {type: string, role: currency_kind}
+      balance:       {type: int64, role: balance}
+glossary:
+  currency_types:
+    basic: "基础货币"
+    virtual: "虚拟货币"
+`
+
 func parseFixtureNode(t *testing.T, y string) yaml.Node {
 	t.Helper()
 	var wrapper struct {
@@ -67,6 +93,46 @@ fixture:
 	// 物化列全集建表（player_id 是 PII → 不存在）
 	if err := db.QueryRow(`SELECT player_id FROM player_basics LIMIT 1`).Scan(new(any)); err == nil {
 		t.Error("PII 列不应存在于 fixture 表")
+	}
+}
+
+func TestBuildFixtureDB_MaterializesPivotDerivedTable(t *testing.T) {
+	s, err := schema_protocol.Parse([]byte(fxSchemaWithDerived))
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := parseFixtureNode(t, `
+fixture:
+  tables:
+    player_basics:
+      groups:
+        - {count: 2, values: {server_id: 1, basic_money: 10, virtual_money: 99}}
+        - {count: 1, values: {server_id: 2, basic_money: 20, virtual_money: 199}}
+`)
+	db, err := buildFixtureDB(s, node, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM player_currencies`).Scan(&n); err != nil {
+		t.Fatalf("derived table player_currencies should be queryable: %v", err)
+	}
+	if n != 6 {
+		t.Fatalf("derived row count = %d, want 6", n)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM player_currencies WHERE currency_type = 'virtual' AND balance = 99`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("virtual money rows with balance=99 = %d, want 2", n)
+	}
+	if err := db.QueryRow(`SELECT COUNT(DISTINCT player_id) FROM player_currencies`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("distinct synthetic player_id = %d, want 3 source rows", n)
 	}
 }
 
@@ -189,4 +255,3 @@ evaluators:
 		t.Errorf("报错应含「不可用」或路径，实际: %v", err)
 	}
 }
-
