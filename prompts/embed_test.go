@@ -16,3 +16,31 @@ func TestSystemPromptHasNoBaselineNumbers(t *testing.T) {
 		t.Fatal("prompt must document the tool")
 	}
 }
+
+func TestSystemPromptDocumentsCountWithoutPIIColumn(t *testing.T) {
+	for _, want := range []string{
+		`{"fn":"count","as":"n"}`,
+		"不要写",
+		"player_id",
+		"PII",
+	} {
+		if !strings.Contains(SystemV0, want) {
+			t.Fatalf("system prompt must document count-without-PII rule; missing %q", want)
+		}
+	}
+}
+
+func TestSystemPromptDocumentsAnalyzeAggregateWhitelist(t *testing.T) {
+	for _, want := range []string{
+		"analyze 不支持",
+		"stddev",
+		"median",
+		"percentile",
+		"query_distribution",
+		"profile.stddev",
+	} {
+		if !strings.Contains(SystemV0, want) {
+			t.Fatalf("system prompt must document analyze aggregate whitelist; missing %q", want)
+		}
+	}
+}

@@ -11,7 +11,8 @@
 ## 可用工具
 - `query_distribution(table, column, filter, bucket_key)`：按桶统计分布，返回每桶 player_count / pct_players / pct_value / total_value（桶内货币总额）/ avg_value（桶内人均）/ cum_pct_players（从最高持有桶向下累计的玩家占比）/ cum_pct_value（从最高持有桶向下累计的货币占比）。行按财富升序排列。
 - `analyze(table, group_by, aggregates, filters, having, order_by, limit)`：通用可组合聚合查询，适合**交叉表 / 分群 / 通用聚合**。
-  - `aggregates`：每项 `{"fn":..,"column":..,"as":..}`，fn ∈ `count`（column 可省=计数）/`count_distinct`/`sum`/`avg`/`min`/`max`，`as` 为该列别名（小写字母数字下划线）。
+  - `aggregates`：每项 `{"fn":..,"column":..,"as":..}`，fn ∈ `count`（column 可省=计数）/`count_distinct`/`sum`/`avg`/`min`/`max`，`as` 为该列别名（小写字母数字下划线）。analyze 不支持 `stddev` / `median` / `percentile`；需要离散度时改用 `query_distribution` 的 `profile.stddev`。
+  - **统计人数 / 行数时必须省略 `column`**，写成 `{"fn":"count","as":"n"}`。不要写 `{"fn":"count","column":"player_id",...}`，也不要用任何 PII / 未物化字段做计数列；这些字段不可查询，会触发 `SCHEMA_ERROR`。
   - `group_by`：字段数组（支持多维交叉表）。`filters`：每项 `{"field":..,"op":..,"value":..}`；op ∈ `= != < <= > >=`，或 `{"field":..,"op":"IN","values":[..]}` / `{"op":"BETWEEN","values":[lo,hi]}` / `{"op":"IS NULL"}`。
   - `having`：对聚合别名过滤 `{"alias":..,"op":..,"value":..}`。`order_by`：`{"key":字段或别名,"desc":true}`。
   - 返回 `table.columns` + `table.rows`（每行一个数组，与 columns 对齐）。**仅截面分析**：不支持时间序列、跨表 join、分位/中位数（分位用 query_distribution 的 profile）。
