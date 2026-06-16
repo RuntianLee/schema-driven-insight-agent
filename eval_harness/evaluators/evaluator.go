@@ -37,6 +37,7 @@ type Score struct {
 	BelowMin  bool   // judge 评分低于任务 min_score（仅 judge 类有意义；供 reflexion 选择性触发）
 	Display   string // 报告人读："1.00 ✓" / "4/5 …"
 	Detail    string // 失败明细 / judge reason
+	Errored   bool   // judge 调用最终失败（已重试）；区别于"评分低/解析失败=0"，均值统计须排除而非折 0
 }
 
 // Evaluator 是三维评估器的统一接口。spec 是任务 YAML 里 evaluators.<name> 子树，
