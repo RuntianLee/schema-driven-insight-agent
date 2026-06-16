@@ -290,6 +290,35 @@ func TestPersistentProviderContextAllowsSimilarQuestionOnlyInThirdRound(t *testi
 	}
 }
 
+func TestPersistentProvider_HitStatsClassifiesCrossTask(t *testing.T) {
+	store := &fakeMemoryStore{searchFunc: func(q memory.Query) ([]memory.SearchResult, error) {
+		// Return a hit whose TaskID differs from the queried taskID but shares TaskClass.
+		return []memory.SearchResult{
+			{Item: memory.Item{
+				ID:        "s1",
+				Adapter:   "b3",
+				TaskID:    "train_task",
+				TaskClass: "benchmark:ab:reflection",
+				Question:  "各服从未上线的玩家各有多少",
+				Summary:   "sentinel=0 是口径非缺失，按规模看占比",
+				Tags:      []string{"reflection", "fix-query"},
+				Score:     0.8,
+			}},
+		}, nil
+	}}
+	p := NewPersistent(&fakeReflectLLM{out: "unused"}, store, PersistentOptions{
+		Adapter: "b3", TaskClass: "benchmark:ab:reflection", Limit: 5,
+	})
+	_, _ = p.ContextFor(context.Background(), "heldout_task", "各服从未上线的玩家各有多少")
+	st := p.HitStats()
+	if st.ExactTask != 0 {
+		t.Fatalf("跨任务检索不应有 exact-task 命中, got %d", st.ExactTask)
+	}
+	if st.SameClass+st.SimilarQuestion == 0 {
+		t.Fatalf("应有 same-class 或 similar-question 命中, got %+v", st)
+	}
+}
+
 func reflectionResult(id, taskID, summary string) memory.SearchResult {
 	return memory.SearchResult{Item: memory.Item{
 		ID:       id,

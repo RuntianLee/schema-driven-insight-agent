@@ -26,10 +26,18 @@ type PersistentOptions struct {
 	AllowedFields       []string
 }
 
+// HitStats records how many memory hits were classified during retrieval.
+type HitStats struct {
+	ExactTask       int // hit.Item.TaskID == queried taskID
+	SameClass       int // different task but same TaskClass as provider opts
+	SimilarQuestion int // cross-task, different class (everything else)
+}
+
 type PersistentProvider struct {
 	short *Provider
 	store memory.Store
 	opts  PersistentOptions
+	hits  HitStats
 }
 
 func NewPersistent(reflectLLM llm.Client, store memory.Store, opts PersistentOptions) *PersistentProvider {
@@ -86,6 +94,9 @@ func (p *PersistentProvider) Reset() {
 	p.short.Reset()
 }
 
+// HitStats returns the cumulative memory hit classification counts for this provider's lifetime.
+func (p *PersistentProvider) HitStats() HitStats { return p.hits }
+
 func (p *PersistentProvider) longContextFor(ctx context.Context, taskID, question string) string {
 	limit := p.limit()
 	seen := map[string]bool{}
@@ -119,6 +130,14 @@ func (p *PersistentProvider) longContextFor(ctx context.Context, taskID, questio
 			}
 			seen[hit.Item.ID] = true
 			results = append(results, hit)
+			switch {
+			case hit.Item.TaskID == taskID:
+				p.hits.ExactTask++
+			case p.opts.TaskClass != "" && hit.Item.TaskClass == p.opts.TaskClass:
+				p.hits.SameClass++
+			default:
+				p.hits.SimilarQuestion++
+			}
 			if len(results) >= limit {
 				break
 			}
