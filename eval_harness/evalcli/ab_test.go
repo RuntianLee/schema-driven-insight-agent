@@ -3,10 +3,12 @@ package evalcli
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
+	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/reflexion"
 )
 
 // fakeLLM 无状态、由 prompt 驱动：
@@ -40,7 +42,7 @@ func TestRunAB_ProviderRaisesPassRate(t *testing.T) {
 		SchemaPath: "testdata/ab/schema.yaml",
 		TasksDir:   "testdata/ab/tasks",
 	}
-	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), fakeProvider{}, 3, 1)
+	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), fakeProvider{}, 3, 1, "reflection")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +84,7 @@ func TestRunAB_DesignBeta_CrossTrialAccumulation(t *testing.T) {
 		TasksDir:   "testdata/ab/tasks",
 	}
 	// runs=1（1 个独立样本），attempts=2（每样本 2 次 reflexion 尝试，取第 2 次）。
-	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), &learningProvider{}, 1, 2)
+	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), &learningProvider{}, 1, 2, "reflection")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,5 +96,38 @@ func TestRunAB_DesignBeta_CrossTrialAccumulation(t *testing.T) {
 	}
 	if !ab.Meets20Pct {
 		t.Fatalf("delta=%g 应判定 Meets20Pct", ab.MeanDelta)
+	}
+}
+
+func TestReflectionProviderForABUsesTransientWhenMemoryDBEmpty(t *testing.T) {
+	p, cleanup, label, err := reflectionProviderForAB(Options{Adapter: "b3"}, fakeLLM{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if label != "reflection" {
+		t.Fatalf("label=%q want reflection", label)
+	}
+	if _, ok := p.(*reflexion.Provider); !ok {
+		t.Fatalf("provider type=%T want *reflexion.Provider", p)
+	}
+}
+
+func TestReflectionProviderForABUsesPersistentWhenMemoryDBSet(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	p, cleanup, label, err := reflectionProviderForAB(Options{
+		Adapter:      "b3",
+		MemoryDBPath: dbPath,
+		MemoryLimit:  3,
+	}, fakeLLM{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if label != "reflection+memory" {
+		t.Fatalf("label=%q want reflection+memory", label)
+	}
+	if _, ok := p.(*reflexion.PersistentProvider); !ok {
+		t.Fatalf("provider type=%T want *reflexion.PersistentProvider", p)
 	}
 }

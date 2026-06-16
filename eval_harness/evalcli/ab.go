@@ -13,6 +13,7 @@ import (
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/runners"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/tasks"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
+	"github.com/RuntianLee/schema-driven-insight-agent/memory"
 	"github.com/RuntianLee/schema-driven-insight-agent/schema_protocol"
 )
 
@@ -26,16 +27,43 @@ func RunAB(opts Options, runs, attempts int) (*evalpkg.ABReport, error) {
 	if err != nil {
 		return nil, fmt.Errorf("真 LLM 初始化失败: %w", err)
 	}
-	var provider runners.ReflectionProvider
-	if attempts >= 1 {
-		provider = reflexion.New(real) // reflect LLM 复用真道
+	provider, cleanup, labelB, err := reflectionProviderForAB(opts, real)
+	if err != nil {
+		return nil, err
 	}
-	return runABWithClients(opts, real, real, provider, runs, attempts)
+	defer cleanup()
+	return runABWithClients(opts, real, real, provider, runs, attempts, labelB)
+}
+
+func reflectionProviderForAB(opts Options, reflectLLM llm.Client) (runners.ReflectionProvider, func(), string, error) {
+	if opts.MemoryDBPath == "" {
+		return reflexion.New(reflectLLM), func() {}, "reflection", nil
+	}
+
+	db, err := memory.Open(opts.MemoryDBPath)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("open memory db %s: %w", opts.MemoryDBPath, err)
+	}
+	if err := memory.Migrate(db); err != nil {
+		db.Close()
+		return nil, nil, "", fmt.Errorf("migrate memory db: %w", err)
+	}
+	store := memory.NewSQLiteStore(db)
+	provider := reflexion.NewPersistent(reflectLLM, store, reflexion.PersistentOptions{
+		Adapter:             opts.Adapter,
+		TaskClass:           "benchmark",
+		ContextOptions:      memory.ContextOptions{MaxItems: opts.MemoryLimit, MaxChars: 1600},
+		Limit:               opts.MemoryLimit,
+		MinScore:            opts.MemoryMinScore,
+		PersistObservations: opts.MemoryWrite,
+	})
+	cleanup := func() { _ = store.Close() }
+	return provider, cleanup, "reflection+memory", nil
 }
 
 // runABWithClients 是 RunAB 的可测内核：client/provider 由调用方注入（测试传 fake）。
 // config A（baseline）：provider=nil 冷跑 1 次；config B：每样本 Reset 后跑 attempts 次 reflexion，取末次。
-func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners.ReflectionProvider, runs, attempts int) (*evalpkg.ABReport, error) {
+func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners.ReflectionProvider, runs, attempts int, labelB string) (*evalpkg.ABReport, error) {
 	if runs <= 0 {
 		return nil, fmt.Errorf("runs 必须 > 0")
 	}
@@ -76,7 +104,7 @@ func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners
 		aReports = append(aReports, ra)
 		bReports = append(bReports, rb) // 只把第 attempts 次（收敛后）计入聚合
 	}
-	return evalpkg.BuildABReport("baseline", "reflection", runs, aReports, bReports)
+	return evalpkg.BuildABReport("baseline", labelB, runs, aReports, bReports)
 }
 
 // FinishAB 打印 A/B 摘要、落盘 JSON（off-gate：恒返回 0）。
