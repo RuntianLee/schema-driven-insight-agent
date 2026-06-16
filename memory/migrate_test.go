@@ -163,6 +163,29 @@ func TestMigrateAllowsOptionalFields(t *testing.T) {
 	}
 }
 
+func TestMigrateAllowsReflectionSourceType(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = db.Exec(`
+		INSERT INTO memory_items
+			(item_id, source_type, source_id, adapter, task_id, task_class, question,
+			 summary, answer_outline, tools_json, tags_json, score, created_at, updated_at)
+		VALUES
+			('reflection-1', 'reflection', 'r1', 'b3', 'retention', 'benchmark',
+			 '如何分析留存', '先确认 cohort 和过滤口径。', '优先校验过滤和分组。',
+			 '["analyze"]', '["reflection","fix-query"]', 0.8, 100, 100)`)
+	if err != nil {
+		t.Fatalf("reflection source_type should be accepted: %v", err)
+	}
+}
+
 func ftsCount(t *testing.T, db *sql.DB, query string) int {
 	t.Helper()
 	var got int

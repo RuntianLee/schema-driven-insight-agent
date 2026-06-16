@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS memory_items (
 	rowid INTEGER PRIMARY KEY,
 	item_id TEXT NOT NULL UNIQUE,
-	source_type TEXT NOT NULL CHECK (source_type IN ('trajectory', 'eval', 'manual')),
+	source_type TEXT NOT NULL CHECK (source_type IN ('trajectory', 'eval', 'manual', 'reflection')),
 	source_id TEXT,
 	adapter TEXT NOT NULL,
 	task_id TEXT,
