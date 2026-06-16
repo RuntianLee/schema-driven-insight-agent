@@ -2,6 +2,7 @@
 package eval_harness
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
@@ -110,5 +111,63 @@ func TestBuildABReport_JudgeDelta(t *testing.T) {
 	}
 	if !ab.Meets20PctJudge {
 		t.Fatalf("Meets20PctJudge should be true for delta=%g", ab.MeanJudgeDelta)
+	}
+}
+
+func TestABReportJSONIncludesMemoryMetadata(t *testing.T) {
+	ab := &ABReport{
+		LabelA:                "baseline",
+		LabelB:                "reflection+memory",
+		Runs:                  1,
+		ReflectionMode:        "reflection+memory",
+		MemoryEnabled:         true,
+		MemoryDBPath:          "/tmp/memory.db",
+		MemorySnapshot:        "before",
+		MemorySnapshotBefore:  "before",
+		MemorySnapshotAfter:   "after",
+		MemorySnapshotStable:  false,
+		MemoryWrite:           true,
+		MemoryRetrievalPolicy: "same_task_then_similar_question",
+	}
+	js, err := ab.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(js)
+	for _, want := range []string{
+		`"memory_enabled": true`,
+		`"memory_snapshot_before": "before"`,
+		`"memory_snapshot_after": "after"`,
+		`"memory_retrieval_policy": "same_task_then_similar_question"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("JSON missing %s:\n%s", want, body)
+		}
+	}
+}
+
+func TestABReportJSONIncludesReadOnlyMemoryBooleans(t *testing.T) {
+	ab := &ABReport{
+		LabelA:                "baseline",
+		LabelB:                "reflection+memory",
+		Runs:                  1,
+		MemoryEnabled:         true,
+		MemorySnapshotStable:  false,
+		MemoryWrite:           false,
+		MemoryRetrievalPolicy: "same_task_then_similar_question",
+	}
+	js, err := ab.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(js)
+	for _, want := range []string{
+		`"memory_enabled": true`,
+		`"memory_snapshot_stable": false`,
+		`"memory_write": false`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("JSON missing %s:\n%s", want, body)
+		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	evalpkg "github.com/RuntianLee/schema-driven-insight-agent/eval_harness"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/reflexion"
 )
@@ -129,5 +130,23 @@ func TestReflectionProviderForABUsesPersistentWhenMemoryDBSet(t *testing.T) {
 	}
 	if _, ok := p.(*reflexion.PersistentProvider); !ok {
 		t.Fatalf("provider type=%T want *reflexion.PersistentProvider", p)
+	}
+}
+
+func TestAnnotateMemoryABReportMarksReadOnlySnapshotInstability(t *testing.T) {
+	ab := &evalpkg.ABReport{LabelA: "baseline", LabelB: "reflection+memory"}
+	opts := Options{Adapter: "b3", MemoryDBPath: filepath.Join(t.TempDir(), "memory.db")}
+	annotateMemoryABReport(ab, opts, "reflection+memory", "before", "after")
+	if !ab.MemoryEnabled {
+		t.Fatal("memory should be enabled")
+	}
+	if ab.MemorySnapshotStable {
+		t.Fatal("snapshot should be unstable")
+	}
+	if !strings.Contains(ab.Caveat, "Memory snapshot changed") {
+		t.Fatalf("missing snapshot caveat: %q", ab.Caveat)
+	}
+	if ab.MemoryRetrievalPolicy != "same_task_then_similar_question" {
+		t.Fatalf("policy=%q", ab.MemoryRetrievalPolicy)
 	}
 }

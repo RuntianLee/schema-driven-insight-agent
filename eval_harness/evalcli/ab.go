@@ -2,9 +2,12 @@
 package evalcli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/eino_agent"
@@ -32,7 +35,14 @@ func RunAB(opts Options, runs, attempts int) (*evalpkg.ABReport, error) {
 		return nil, err
 	}
 	defer cleanup()
-	return runABWithClients(opts, real, real, provider, runs, attempts, labelB)
+	snapshotBefore := memorySnapshotID(opts.MemoryDBPath)
+	ab, err := runABWithClients(opts, real, real, provider, runs, attempts, labelB)
+	if err != nil {
+		return nil, err
+	}
+	snapshotAfter := memorySnapshotID(opts.MemoryDBPath)
+	annotateMemoryABReport(ab, opts, labelB, snapshotBefore, snapshotAfter)
+	return ab, nil
 }
 
 func reflectionProviderForAB(opts Options, reflectLLM llm.Client) (runners.ReflectionProvider, func(), string, error) {
@@ -105,6 +115,66 @@ func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners
 		bReports = append(bReports, rb) // 只把第 attempts 次（收敛后）计入聚合
 	}
 	return evalpkg.BuildABReport("baseline", labelB, runs, aReports, bReports)
+}
+
+func memorySnapshotID(path string) string {
+	if path == "" {
+		return ""
+	}
+	parts := []string{path, path + "-wal"}
+	h := sha256.New()
+	wrote := false
+	for _, p := range parts {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		h.Write([]byte(p))
+		h.Write([]byte{0})
+		h.Write(data)
+		wrote = true
+	}
+	if !wrote {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func annotateMemoryABReport(ab *evalpkg.ABReport, opts Options, labelB, snapshotBefore, snapshotAfter string) {
+	if ab == nil {
+		return
+	}
+	ab.ReflectionMode = labelB
+	ab.MemoryEnabled = opts.MemoryDBPath != ""
+	ab.MemoryDBPath = opts.MemoryDBPath
+	ab.MemorySnapshot = snapshotBefore
+	ab.MemorySnapshotBefore = snapshotBefore
+	ab.MemorySnapshotAfter = snapshotAfter
+	ab.MemorySnapshotStable = snapshotBefore != "" && snapshotBefore == snapshotAfter
+	ab.MemoryWrite = opts.MemoryWrite
+	ab.MemoryRetrievalPolicy = memoryRetrievalPolicy(opts)
+	if ab.MemoryEnabled && !ab.MemoryWrite && !ab.MemorySnapshotStable {
+		appendABCaveat(ab, "Memory snapshot changed during read-only A/B run; do not treat this report as a fixed-snapshot measurement.")
+	}
+}
+
+func memoryRetrievalPolicy(opts Options) string {
+	if opts.MemoryDBPath == "" {
+		return ""
+	}
+	return "same_task_then_similar_question"
+}
+
+func appendABCaveat(ab *evalpkg.ABReport, msg string) {
+	msg = strings.TrimSpace(msg)
+	if ab == nil || msg == "" {
+		return
+	}
+	if strings.TrimSpace(ab.Caveat) == "" {
+		ab.Caveat = msg
+		return
+	}
+	ab.Caveat = strings.TrimSpace(ab.Caveat) + "\n" + msg
 }
 
 // FinishAB 打印 A/B 摘要、落盘 JSON（off-gate：恒返回 0）。

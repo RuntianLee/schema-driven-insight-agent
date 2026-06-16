@@ -21,23 +21,32 @@ type ABTaskDelta struct {
 
 // ABReport 是 A/B 聚合结果。MinSuite/MaxSuite 是每轮 suite 级通过率的极差（方差信号）。
 type ABReport struct {
-	LabelA        string        `json:"label_a"`
-	LabelB        string        `json:"label_b"`
-	Runs          int           `json:"runs"`
-	Tasks         []ABTaskDelta `json:"tasks"`
-	MeanPassRateA float64       `json:"mean_pass_rate_a"`
-	MeanPassRateB float64       `json:"mean_pass_rate_b"`
-	MeanDelta     float64       `json:"mean_delta"`
-	MinSuiteA     float64       `json:"min_suite_a"`
-	MaxSuiteA     float64       `json:"max_suite_a"`
-	MinSuiteB     float64       `json:"min_suite_b"`
-	MaxSuiteB     float64       `json:"max_suite_b"`
-	Meets20Pct      bool          `json:"meets_20pct"`
-	MeanJudgeA      float64       `json:"mean_judge_a"`
-	MeanJudgeB      float64       `json:"mean_judge_b"`
-	MeanJudgeDelta  float64       `json:"mean_judge_delta"`
-	Meets20PctJudge bool          `json:"meets_20pct_judge"`
-	Caveat          string        `json:"caveat,omitempty"`
+	LabelA                string        `json:"label_a"`
+	LabelB                string        `json:"label_b"`
+	Runs                  int           `json:"runs"`
+	Tasks                 []ABTaskDelta `json:"tasks"`
+	MeanPassRateA         float64       `json:"mean_pass_rate_a"`
+	MeanPassRateB         float64       `json:"mean_pass_rate_b"`
+	MeanDelta             float64       `json:"mean_delta"`
+	MinSuiteA             float64       `json:"min_suite_a"`
+	MaxSuiteA             float64       `json:"max_suite_a"`
+	MinSuiteB             float64       `json:"min_suite_b"`
+	MaxSuiteB             float64       `json:"max_suite_b"`
+	Meets20Pct            bool          `json:"meets_20pct"`
+	MeanJudgeA            float64       `json:"mean_judge_a"`
+	MeanJudgeB            float64       `json:"mean_judge_b"`
+	MeanJudgeDelta        float64       `json:"mean_judge_delta"`
+	Meets20PctJudge       bool          `json:"meets_20pct_judge"`
+	ReflectionMode        string        `json:"reflection_mode,omitempty"`
+	MemoryEnabled         bool          `json:"memory_enabled"`
+	MemoryDBPath          string        `json:"memory_db_path,omitempty"`
+	MemorySnapshot        string        `json:"memory_snapshot,omitempty"`
+	MemorySnapshotBefore  string        `json:"memory_snapshot_before,omitempty"`
+	MemorySnapshotAfter   string        `json:"memory_snapshot_after,omitempty"`
+	MemorySnapshotStable  bool          `json:"memory_snapshot_stable"`
+	MemoryWrite           bool          `json:"memory_write"`
+	MemoryRetrievalPolicy string        `json:"memory_retrieval_policy,omitempty"`
+	Caveat                string        `json:"caveat,omitempty"`
 }
 
 const dcEval = "data_correctness"
