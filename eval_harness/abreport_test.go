@@ -146,6 +146,27 @@ func TestABReportJSONIncludesMemoryMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildABReport_ExcludesErroredJudgeFromMean(t *testing.T) {
+	mk := func(v float64, errored bool) *Report {
+		r := NewReport([]string{"t"})
+		r.Add("t", evaluators.Score{Evaluator: "reasoning_quality", Value: v, Errored: errored}, false)
+		r.Add("t", evaluators.Score{Evaluator: "data_correctness", Value: 1, Pass: true}, true)
+		return r
+	}
+	a := []*Report{mk(0.8, false), mk(0.0, true)}
+	b := []*Report{mk(0.8, false), mk(0.8, false)}
+	ab, err := BuildABReport("A", "B", 2, a, b)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if ab.MeanJudgeA != 0.8 {
+		t.Fatalf("errored judge 应排除出均值, want 0.8 got %v", ab.MeanJudgeA)
+	}
+	if ab.JudgeErrA != 1 {
+		t.Fatalf("应记 1 次 judge error, got %d", ab.JudgeErrA)
+	}
+}
+
 func TestABReportJSONIncludesReadOnlyMemoryBooleans(t *testing.T) {
 	ab := &ABReport{
 		LabelA:                "baseline",
