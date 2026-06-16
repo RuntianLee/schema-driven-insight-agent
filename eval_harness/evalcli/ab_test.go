@@ -181,10 +181,26 @@ func TestReflectionProviderForABUsesPersistentWhenMemoryDBSet(t *testing.T) {
 	}
 }
 
+func TestAnnotateMemoryABReportSetsHitTypeBreakdown(t *testing.T) {
+	ab := &evalpkg.ABReport{LabelA: "baseline", LabelB: "reflection+memory"}
+	opts := Options{Adapter: "b3", MemoryDBPath: "memory.db"}
+	hits := reflexion.HitStats{SameClass: 2, SimilarQuestion: 1}
+	annotateMemoryABReport(ab, opts, "reflection+memory", "snap", "snap", hits)
+	if ab.MemoryHitsExactTask != 0 {
+		t.Fatalf("MemoryHitsExactTask=%d want 0", ab.MemoryHitsExactTask)
+	}
+	if ab.MemoryHitsSameClass != 2 {
+		t.Fatalf("MemoryHitsSameClass=%d want 2", ab.MemoryHitsSameClass)
+	}
+	if ab.MemoryHitsSimilarQuestion != 1 {
+		t.Fatalf("MemoryHitsSimilarQuestion=%d want 1", ab.MemoryHitsSimilarQuestion)
+	}
+}
+
 func TestAnnotateMemoryABReportMarksReadOnlySnapshotInstability(t *testing.T) {
 	ab := &evalpkg.ABReport{LabelA: "baseline", LabelB: "reflection+memory"}
 	opts := Options{Adapter: "b3", MemoryDBPath: filepath.Join(t.TempDir(), "memory.db")}
-	annotateMemoryABReport(ab, opts, "reflection+memory", "before", "after")
+	annotateMemoryABReport(ab, opts, "reflection+memory", "before", "after", reflexion.HitStats{})
 	if !ab.MemoryEnabled {
 		t.Fatal("memory should be enabled")
 	}

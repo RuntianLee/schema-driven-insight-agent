@@ -49,8 +49,11 @@ type ABReport struct {
 	MemorySnapshotAfter   string        `json:"memory_snapshot_after,omitempty"`
 	MemorySnapshotStable  bool          `json:"memory_snapshot_stable"`
 	MemoryWrite           bool          `json:"memory_write"`
-	MemoryRetrievalPolicy string        `json:"memory_retrieval_policy,omitempty"`
-	Caveat                string        `json:"caveat,omitempty"`
+	MemoryRetrievalPolicy     string        `json:"memory_retrieval_policy,omitempty"`
+	MemoryHitsExactTask       int           `json:"memory_hits_exact_task"`
+	MemoryHitsSameClass       int           `json:"memory_hits_same_class"`
+	MemoryHitsSimilarQuestion int           `json:"memory_hits_similar_question"`
+	Caveat                    string        `json:"caveat,omitempty"`
 }
 
 const dcEval = "data_correctness"

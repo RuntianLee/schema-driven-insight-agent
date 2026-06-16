@@ -44,7 +44,11 @@ func RunAB(opts Options, runs, attempts int) (*evalpkg.ABReport, error) {
 		return nil, err
 	}
 	snapshotAfter := memorySnapshotID(opts.MemoryDBPath)
-	annotateMemoryABReport(ab, opts, labelB, snapshotBefore, snapshotAfter)
+	var hits reflexion.HitStats
+	if pp, ok := provider.(*reflexion.PersistentProvider); ok {
+		hits = pp.HitStats()
+	}
+	annotateMemoryABReport(ab, opts, labelB, snapshotBefore, snapshotAfter, hits)
 	return ab, nil
 }
 
@@ -206,7 +210,7 @@ func memorySnapshotID(path string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func annotateMemoryABReport(ab *evalpkg.ABReport, opts Options, labelB, snapshotBefore, snapshotAfter string) {
+func annotateMemoryABReport(ab *evalpkg.ABReport, opts Options, labelB, snapshotBefore, snapshotAfter string, hits reflexion.HitStats) {
 	if ab == nil {
 		return
 	}
@@ -219,6 +223,9 @@ func annotateMemoryABReport(ab *evalpkg.ABReport, opts Options, labelB, snapshot
 	ab.MemorySnapshotStable = snapshotBefore != "" && snapshotBefore == snapshotAfter
 	ab.MemoryWrite = opts.MemoryWrite
 	ab.MemoryRetrievalPolicy = memoryRetrievalPolicy(opts)
+	ab.MemoryHitsExactTask = hits.ExactTask
+	ab.MemoryHitsSameClass = hits.SameClass
+	ab.MemoryHitsSimilarQuestion = hits.SimilarQuestion
 	if ab.MemoryEnabled && !ab.MemoryWrite && !ab.MemorySnapshotStable {
 		appendABCaveat(ab, "Memory snapshot changed during read-only A/B run; do not treat this report as a fixed-snapshot measurement.")
 	}
