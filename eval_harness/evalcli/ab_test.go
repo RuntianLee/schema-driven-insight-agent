@@ -10,6 +10,7 @@ import (
 	evalpkg "github.com/RuntianLee/schema-driven-insight-agent/eval_harness"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/reflexion"
+	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
 )
 
 // fakeLLM 无状态、由 prompt 驱动：
@@ -97,6 +98,53 @@ func TestRunAB_DesignBeta_CrossTrialAccumulation(t *testing.T) {
 	}
 	if !ab.Meets20Pct {
 		t.Fatalf("delta=%g 应判定 Meets20Pct", ab.MeanDelta)
+	}
+}
+
+func TestRunAB_PersistsTrajectoryWithABTaskClass(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ab-traj.db")
+	opts := Options{
+		Adapter:    "test",
+		SchemaPath: "testdata/ab/schema.yaml",
+		TasksDir:   "testdata/ab/tasks",
+		TrajDBPath: dbPath,
+	}
+
+	_, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), &learningProvider{}, 1, 2, "reflection")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := trajectory.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM trajectories`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("trajectories=%d want 3 (baseline + 2 reflection attempts)", n)
+	}
+	for _, tc := range []string{
+		"benchmark:ab:baseline",
+		"benchmark:ab:reflection:attempt1",
+		"benchmark:ab:reflection:attempt2",
+	} {
+		if err := db.QueryRow(`SELECT count(*) FROM trajectories WHERE task_class=?`, tc).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("task_class %q count=%d want 1", tc, n)
+		}
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM eval_results WHERE evaluator_name='data_correctness'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("eval_results data_correctness rows=%d want 3", n)
 	}
 }
 

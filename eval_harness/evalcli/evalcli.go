@@ -51,6 +51,7 @@ type Options struct {
 	MemoryWrite    bool                   // true = 把本次 reflection observation 写回 memory；默认 false
 	MemoryLimit    int                    // <=0 使用 provider 默认值
 	MemoryMinScore float64                // 长期 memory 最低分；0 表示不过滤
+	TaskClass      string                 // 可选 trajectory.task_class 覆盖；空串默认 benchmark
 }
 
 // seedTaskDB 实现 fixture 三级解析（YAML > Go > -db 共享库），返回连接 + 清理函数。
@@ -146,6 +147,7 @@ func runPass(
 			TrajDB:             trajDB,
 			AgentLLM:           agentLLM,
 			ReflectionProvider: provider,
+			TaskClass:          opts.TaskClass,
 		})
 		cleanup()
 		if err != nil {

@@ -23,6 +23,7 @@ type PersistentOptions struct {
 	Limit               int
 	MinScore            float64
 	PersistObservations bool
+	AllowedFields       []string
 }
 
 type PersistentProvider struct {
@@ -152,7 +153,7 @@ func memoryItemFromObservation(opts PersistentOptions, res evaluators.TaskResult
 		return memory.Item{}, false
 	}
 	tools := toolNames(res.ToolCalls)
-	summary, outline := persistentObservationText(obs, tools)
+	summary, outline := persistentObservationText(obs, tools, opts.AllowedFields)
 	if strings.TrimSpace(summary) == "" {
 		return memory.Item{}, false
 	}
@@ -162,7 +163,7 @@ func memoryItemFromObservation(opts PersistentOptions, res evaluators.TaskResult
 		Adapter:       opts.Adapter,
 		TaskID:        res.TaskID,
 		TaskClass:     opts.TaskClass,
-		Question:      persistentMemoryText(res.Question),
+		Question:      persistentMemoryText(res.Question, opts.AllowedFields),
 		Summary:       summary,
 		AnswerOutline: outline,
 		Tools:         tools,
@@ -171,10 +172,10 @@ func memoryItemFromObservation(opts PersistentOptions, res evaluators.TaskResult
 	}, true
 }
 
-func persistentObservationText(obs observation, tools []string) (summary, outline string) {
+func persistentObservationText(obs observation, tools []string, allowedFields []string) (summary, outline string) {
 	switch obs.mode {
 	case observationFixQuery:
-		summary = persistentMemoryText(obs.lesson)
+		summary = persistentMemoryText(obs.lesson, allowedFields)
 		outline = "下次优先校验工具形态、过滤口径、分组/聚合参数和 caveat；只把该条 memory 当作方法经验。"
 	case observationRefineExplanation:
 		summary = "查询口径已经通过 data_correctness；后续应复用同一查询口径，只改进解读完整性。"
@@ -182,7 +183,7 @@ func persistentObservationText(obs observation, tools []string) (summary, outlin
 	default:
 		return "", ""
 	}
-	return summary, persistentMemoryText(outline)
+	return summary, persistentMemoryText(outline, allowedFields)
 }
 
 func toolNames(calls []evaluators.ToolCall) []string {
@@ -243,16 +244,18 @@ func renderReflectionMemory(results []memory.SearchResult, opts memory.ContextOp
 	return truncateRunes(b.String(), maxChars)
 }
 
-func persistentMemoryText(s string) string {
+func persistentMemoryText(s string, allowedFields []string) string {
 	s = memory.ScrubText(strings.TrimSpace(s))
 	s = redactLiteralFacts(s)
+	s = redactUnknownFieldNames(s, allowedFields)
 	return truncateRunes(s, 500)
 }
 
 var (
-	jsonRowsPattern = regexp.MustCompile(`(?is)\{[^{}]*"rows"\s*:\s*\[.*\]\s*\}`)
-	idValuePattern  = regexp.MustCompile(`(?i)\b[a-z_]*id\s*=\s*\d+\b`)
-	numberPattern   = regexp.MustCompile(`\b\d+(?:\.\d+)?%?\b`)
+	jsonRowsPattern  = regexp.MustCompile(`(?is)\{[^{}]*"rows"\s*:\s*\[.*\]\s*\}`)
+	idValuePattern   = regexp.MustCompile(`(?i)\b[a-z_]*id\s*=\s*\d+\b`)
+	numberPattern    = regexp.MustCompile(`\b\d+(?:\.\d+)?%?\b`)
+	fieldNamePattern = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9_]*\b`)
 )
 
 func redactLiteralFacts(s string) string {
@@ -260,6 +263,30 @@ func redactLiteralFacts(s string) string {
 	s = idValuePattern.ReplaceAllString(s, "[id]")
 	s = numberPattern.ReplaceAllString(s, "[number]")
 	return s
+}
+
+func redactUnknownFieldNames(s string, allowedFields []string) string {
+	if len(allowedFields) == 0 {
+		return s
+	}
+	allowed := make(map[string]bool, len(allowedFields))
+	for _, f := range allowedFields {
+		allowed[strings.ToLower(strings.TrimSpace(f))] = true
+	}
+	return fieldNamePattern.ReplaceAllStringFunc(s, func(tok string) string {
+		key := strings.ToLower(tok)
+		if allowed[key] {
+			return tok
+		}
+		if looksLikeFieldName(key) {
+			return "[field]"
+		}
+		return tok
+	})
+}
+
+func looksLikeFieldName(tok string) bool {
+	return strings.Contains(tok, "_") || tok == "uid" || tok == "id" || strings.HasSuffix(tok, "_id")
 }
 
 func truncateRunes(s string, max int) string {

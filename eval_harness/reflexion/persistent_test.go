@@ -105,6 +105,36 @@ func TestPersistentProviderObservePersistsFixQueryWhenEnabled(t *testing.T) {
 	assertNoPersistentLeak(t, item, "server_id=3", "42.7", `"rows"`, `{"rows"`, "wrong_field")
 }
 
+func TestPersistentProviderObserveDropsSchemaUnknownFieldNames(t *testing.T) {
+	store := &fakeMemoryStore{}
+	p := NewPersistent(&fakeReflectLLM{
+		out: "统计人数时不要用 player_id 或 uid，应继续按 server_id 分组，并留意 level 为空值。",
+	}, store, PersistentOptions{
+		Adapter:             "b3",
+		TaskClass:           "benchmark",
+		PersistObservations: true,
+		AllowedFields:       []string{"server_id", "level"},
+	})
+
+	if err := p.Observe(context.Background(), failRes("t1"), map[string]evaluators.Score{
+		"data_correctness": {Pass: false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if store.upserts != 1 {
+		t.Fatalf("upserts=%d want 1", store.upserts)
+	}
+	item := store.items[0]
+	assertNoPersistentLeak(t, item, "player_id", "uid")
+	if !strings.Contains(item.Summary, "server_id") {
+		t.Fatalf("known schema field should be retained, summary=%q", item.Summary)
+	}
+	if !strings.Contains(item.Summary, "level") {
+		t.Fatalf("known schema field should be retained, summary=%q", item.Summary)
+	}
+}
+
 func TestPersistentProviderObservePersistsRefineExplanationAsTemplate(t *testing.T) {
 	store := &fakeMemoryStore{}
 	p := NewPersistent(&fakeReflectLLM{out: "不该被调用"}, store, PersistentOptions{

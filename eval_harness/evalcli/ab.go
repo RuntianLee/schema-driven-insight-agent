@@ -3,10 +3,12 @@ package evalcli
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
 	"github.com/RuntianLee/schema-driven-insight-agent/memory"
 	"github.com/RuntianLee/schema-driven-insight-agent/schema_protocol"
+	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
 )
 
 // RunAB 解析真 LLM client（agent+judge+reflect 共用），跑 Design β A/B。
@@ -58,6 +61,11 @@ func reflectionProviderForAB(opts Options, reflectLLM llm.Client) (runners.Refle
 		db.Close()
 		return nil, nil, "", fmt.Errorf("migrate memory db: %w", err)
 	}
+	allowedFields, err := allowedFieldsForMemory(opts.SchemaPath)
+	if err != nil {
+		db.Close()
+		return nil, nil, "", err
+	}
 	store := memory.NewSQLiteStore(db)
 	provider := reflexion.NewPersistent(reflectLLM, store, reflexion.PersistentOptions{
 		Adapter:             opts.Adapter,
@@ -66,9 +74,41 @@ func reflectionProviderForAB(opts Options, reflectLLM llm.Client) (runners.Refle
 		Limit:               opts.MemoryLimit,
 		MinScore:            opts.MemoryMinScore,
 		PersistObservations: opts.MemoryWrite,
+		AllowedFields:       allowedFields,
 	})
 	cleanup := func() { _ = store.Close() }
 	return provider, cleanup, "reflection+memory", nil
+}
+
+func allowedFieldsForMemory(schemaPath string) ([]string, error) {
+	if schemaPath == "" {
+		return nil, nil
+	}
+	schemaData, err := os.ReadFile(schemaPath)
+	if err != nil {
+		return nil, fmt.Errorf("read schema %s for memory fields: %w", schemaPath, err)
+	}
+	schema, err := schema_protocol.Parse(schemaData)
+	if err != nil {
+		return nil, fmt.Errorf("parse schema for memory fields: %w", err)
+	}
+	seen := map[string]bool{}
+	for _, tbl := range schema.StateTables {
+		for field := range tbl.Fields {
+			seen[field] = true
+		}
+	}
+	for _, tbl := range schema.DerivedTables {
+		for field := range tbl.Fields {
+			seen[field] = true
+		}
+	}
+	fields := make([]string, 0, len(seen))
+	for field := range seen {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	return fields, nil
 }
 
 // runABWithClients 是 RunAB 的可测内核：client/provider 由调用方注入（测试传 fake）。
@@ -93,10 +133,15 @@ func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners
 		return nil, fmt.Errorf("load tasks %s: %w", opts.TasksDir, err)
 	}
 
-	// trajDB 恒传 nil：A/B 只产出 ABReport 聚合。
+	trajDB, cleanup, err := trajectoryDBForAB(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
 	var aReports, bReports []*evalpkg.Report
 	for i := 0; i < runs; i++ {
-		ra, err := runPass(schema, taskList, opts, agentLLM, judge, nil, nil) // A: baseline 冷跑 1 次
+		ra, err := runPass(schema, taskList, withTaskClass(opts, "benchmark:ab:baseline"), agentLLM, judge, nil, trajDB) // A: baseline 冷跑 1 次
 		if err != nil {
 			return nil, fmt.Errorf("A run %d: %w", i, err)
 		}
@@ -106,7 +151,8 @@ func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners
 		}
 		var rb *evalpkg.Report
 		for k := 0; k < attempts; k++ {
-			rb, err = runPass(schema, taskList, opts, agentLLM, judge, provider, nil) // B: 第 k 次 reflexion 尝试
+			taskClass := fmt.Sprintf("benchmark:ab:%s:attempt%d", labelB, k+1)
+			rb, err = runPass(schema, taskList, withTaskClass(opts, taskClass), agentLLM, judge, provider, trajDB) // B: 第 k 次 reflexion 尝试
 			if err != nil {
 				return nil, fmt.Errorf("B run %d attempt %d: %w", i, k, err)
 			}
@@ -115,6 +161,26 @@ func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners
 		bReports = append(bReports, rb) // 只把第 attempts 次（收敛后）计入聚合
 	}
 	return evalpkg.BuildABReport("baseline", labelB, runs, aReports, bReports)
+}
+
+func trajectoryDBForAB(opts Options) (*sql.DB, func(), error) {
+	if opts.TrajDBPath == "" {
+		return nil, func() {}, nil
+	}
+	db, err := trajectory.Open(opts.TrajDBPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open trajectory db %s: %w", opts.TrajDBPath, err)
+	}
+	if err := trajectory.Migrate(db); err != nil {
+		db.Close()
+		return nil, nil, fmt.Errorf("migrate trajectory db: %w", err)
+	}
+	return db, func() { _ = db.Close() }, nil
+}
+
+func withTaskClass(opts Options, taskClass string) Options {
+	opts.TaskClass = taskClass
+	return opts
 }
 
 func memorySnapshotID(path string) string {
