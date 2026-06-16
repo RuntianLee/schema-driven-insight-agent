@@ -3,8 +3,56 @@ package evaluators
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
+
+type flakyJudge struct {
+	failN int
+	calls int
+	ok    string
+}
+
+func (f *flakyJudge) Call(_ context.Context, _ string) (string, int, int, float64, error) {
+	f.calls++
+	if f.calls <= f.failN {
+		return "", 0, 0, 0, fmt.Errorf("transient judge error #%d", f.calls)
+	}
+	return f.ok, 0, 0, 0, nil
+}
+func (f *flakyJudge) Model() string { return "flaky-judge" }
+
+func TestJudge_RetriesThenSucceeds(t *testing.T) {
+	j := &judgeEvaluator{name: "reasoning_quality", intro: "x",
+		client: &flakyJudge{failN: 2, ok: `{"score":4,"reason":"ok"}`}}
+	spec := specNode(t, "rubric: r\nmin_score: 4")
+	s, err := j.Evaluate(context.Background(), TaskResult{Answer: "a"}, spec)
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if s.Errored {
+		t.Fatalf("重试后应成功, got Errored")
+	}
+	if s.Value != 4.0/5.0 {
+		t.Fatalf("score 应为 4/5, got %v", s.Value)
+	}
+}
+
+func TestJudge_ExhaustedRetriesMarksErrored(t *testing.T) {
+	j := &judgeEvaluator{name: "reasoning_quality", intro: "x",
+		client: &flakyJudge{failN: 99, ok: `{"score":4,"reason":"ok"}`}}
+	spec := specNode(t, "rubric: r\nmin_score: 4")
+	s, err := j.Evaluate(context.Background(), TaskResult{Answer: "a"}, spec)
+	if err != nil {
+		t.Fatalf("evaluate 不应返回 error（错误须落在 Score.Errored）, got %v", err)
+	}
+	if !s.Errored {
+		t.Fatalf("重试耗尽应标 Errored, got %+v", s)
+	}
+	if s.Value != 0 || s.Pass {
+		t.Fatalf("errored score 应 Value=0/Pass=false, got %+v", s)
+	}
+}
 
 func TestMockJudgeReturnsPlaceholder(t *testing.T) {
 	c := NewMockJudge()

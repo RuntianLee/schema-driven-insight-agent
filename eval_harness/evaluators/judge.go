@@ -21,6 +21,9 @@ type judgeReply struct {
 	Reason string `json:"reason"`
 }
 
+// judgeMaxAttempts 是 judge Call 的最大尝试次数（1 次初始 + 2 次重试）。
+const judgeMaxAttempts = 3
+
 // judgeEvaluator 是 reasoning_quality / insight_novelty 的共享基底（spec §4.2-4.3）。
 // 真构造 prompt + 真解析；client 是 mock 或真 LLM（唯一切换点）。Deterministic 恒 false。
 type judgeEvaluator struct {
@@ -38,10 +41,27 @@ func (j *judgeEvaluator) Evaluate(ctx context.Context, res TaskResult, spec *yam
 		return Score{}, fmt.Errorf("decode %s spec: %w", j.name, err)
 	}
 	prompt := j.buildPrompt(sp.Rubric, res.Answer)
-	raw, _, _, _, err := j.client.Call(ctx, prompt)
-	if err != nil {
-		return Score{}, fmt.Errorf("%s judge call: %w", j.name, err)
+
+	var raw string
+	var callErr error
+	for attempt := 1; attempt <= judgeMaxAttempts; attempt++ {
+		raw, _, _, _, callErr = j.client.Call(ctx, prompt)
+		if callErr == nil {
+			break
+		}
 	}
+	if callErr != nil {
+		// 重试耗尽：标记 Errored，不折 0 进均值统计，不向上返回 error（suite 照常继续）。
+		return Score{
+			Evaluator: j.name,
+			Value:     0,
+			Pass:      false,
+			Errored:   true,
+			Display:   "ERR",
+			Detail:    fmt.Sprintf("judge 调用失败（已重试 %d 次）: %v", judgeMaxAttempts, callErr),
+		}, nil
+	}
+
 	reply, perr := parseJudgeReply(raw)
 	if perr != nil {
 		// R3：解析失败不中断 suite，记 0 分 + 原文；视为未达标允许 refine 尝试改进。
