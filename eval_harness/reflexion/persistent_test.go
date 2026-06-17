@@ -314,8 +314,8 @@ func TestPersistentProvider_HitStatsClassifiesCrossTask(t *testing.T) {
 	if st.ExactTask != 0 {
 		t.Fatalf("跨任务检索不应有 exact-task 命中, got %d", st.ExactTask)
 	}
-	if st.SameClass+st.SimilarQuestion == 0 {
-		t.Fatalf("应有 same-class 或 similar-question 命中, got %+v", st)
+	if st.SameClass != 1 || st.SimilarQuestion != 0 {
+		t.Fatalf("跨任务同类应分类为 same-class=1 / similar-question=0, got %+v", st)
 	}
 }
 
