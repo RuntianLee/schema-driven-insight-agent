@@ -237,3 +237,71 @@ func TestDataCorrectness_TableExpectPos(t *testing.T) {
 		}
 	})
 }
+
+func TestDataCorrectness_TableExpectAnyAllowsCoreMetricColumnReorder(t *testing.T) {
+	tr := &contract.TableResult{
+		Columns: []contract.ColumnMeta{
+			{Name: "server_id"},
+			{Name: "player_count"},
+			{Name: "avg_virtual_money"},
+		},
+		Rows: [][]any{{int64(1), int64(100), int64(2000)}},
+	}
+	fails := checkTable(tr, dcTableRow{
+		Match: map[string]string{"server_id": "1"},
+		ExpectAny: []dcTableExpectAny{{
+			Columns: []string{"avg_virtual_money", "avg_money"},
+			Value:   2000,
+		}},
+	})
+	if len(fails) != 0 {
+		t.Fatalf("expect_any should pass despite count column before core metric, got fails: %v", fails)
+	}
+}
+
+func TestDataCorrectness_TableSpecPassesWhenAnySuccessfulToolResponseMatches(t *testing.T) {
+	res := TaskResult{ToolCalls: []ToolCall{
+		{
+			Name: "analyze",
+			Response: contract.Response{
+				Status: contract.StatusOK,
+				Table: &contract.TableResult{
+					Columns:  []contract.ColumnMeta{{Name: "server_id"}, {Name: "never_online_count"}},
+					Rows:     [][]any{{int64(1), int64(20)}, {int64(2), int64(60)}},
+					RowCount: 2,
+				},
+			},
+		},
+		{
+			Name: "analyze",
+			Response: contract.Response{
+				Status: contract.StatusOK,
+				Table: &contract.TableResult{
+					Columns:  []contract.ColumnMeta{{Name: "server_id"}, {Name: "total_players"}},
+					Rows:     [][]any{{int64(1), int64(100)}, {int64(2), int64(100)}},
+					RowCount: 2,
+				},
+			},
+		},
+	}}
+	spec := specNode(t, `
+tool: analyze
+expect_status: OK
+table:
+  - match: {server_id: "1"}
+    expect_any:
+      - columns: ["never_online_count", "n"]
+        value: 20
+  - match: {server_id: "2"}
+    expect_any:
+      - columns: ["never_online_count", "n"]
+        value: 60
+`)
+	score, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !score.Pass {
+		t.Fatalf("expected any matching analyze response to satisfy spec, got %+v", score)
+	}
+}

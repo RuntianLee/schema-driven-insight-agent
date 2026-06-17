@@ -42,6 +42,8 @@ type Config struct {
 	// ReflectionProvider 非 nil 则在 agent 跑每个任务前，把其返回的上下文前置注入 question
 	// （reflection 开，A/B 的 config B）；nil（默认）= reflection 关（config A / 既有行为）。
 	ReflectionProvider ReflectionProvider
+	// TaskClass 写入 trajectory.task_class；空串沿用 benchmark，保持既有 suite 语义。
+	TaskClass string
 }
 
 // RunSuite 逐任务跑 agent（mock LLM）+ 真 tool，收集 TaskResult，跑 evaluator，汇总 Report。
@@ -56,7 +58,7 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		var store agent.TrajectoryStore = capture
 		var trajID string
 		if cfg.TrajDB != nil {
-			if rec, err := trajectory.New(ctx, cfg.TrajDB, eino_agent.AgentVersion, task.Question, "benchmark"); err == nil {
+			if rec, err := trajectory.New(ctx, cfg.TrajDB, eino_agent.AgentVersion, task.Question, taskClass(cfg)); err == nil {
 				tee := newTeeStore(capture, rec)
 				store = tee
 				trajID = tee.TrajectoryID()
@@ -113,6 +115,13 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		}
 	}
 	return rep, nil
+}
+
+func taskClass(cfg Config) string {
+	if cfg.TaskClass != "" {
+		return cfg.TaskClass
+	}
+	return "benchmark"
 }
 
 // applyReflection 在 provider 非 nil 且返回非空时，把 reflection 上下文前置到 question。

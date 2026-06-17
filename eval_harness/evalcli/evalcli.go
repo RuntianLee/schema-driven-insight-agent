@@ -35,18 +35,23 @@ type FixtureFunc func(dir string) (*sql.DB, error)
 
 // Options 装配一次 eval 运行的全部输入。
 type Options struct {
-	Adapter      string                 // adapter 名（history meta + 临时目录前缀）
-	SchemaPath   string                 // schema.yaml 路径
-	TasksDir     string                 // 任务 YAML 目录
-	Fixtures     map[string]FixtureFunc // 任务 ID → Go fixture seeder（逃生舱；YAML fixture 优先）
-	SharedDBPath string                 // 共享 Layer2 db（YAML/Go fixture 都没有时的兜底；cmd/eval -db）
-	OnlyTask     string                 // 只跑指定任务 ID；空跑全部
-	UseRealLLM   bool                   // true → ResolveStrict 真道（agent+judge 共用）
-	ConfigPath   string                 // 真道 LLM provider YAML
-	OutDir       string                 // 报告落盘目录；空则不落盘
-	TrajDBPath   string                 // trajectory 落库路径；空串不落库
-	HistoryOut   string                 // PII-free verdict JSONL 追加路径；空则不写
-	Commit       string                 // history 行的 commit SHA
+	Adapter        string                 // adapter 名（history meta + 临时目录前缀）
+	SchemaPath     string                 // schema.yaml 路径
+	TasksDir       string                 // 任务 YAML 目录
+	Fixtures       map[string]FixtureFunc // 任务 ID → Go fixture seeder（逃生舱；YAML fixture 优先）
+	SharedDBPath   string                 // 共享 Layer2 db（YAML/Go fixture 都没有时的兜底；cmd/eval -db）
+	OnlyTask       string                 // 只跑指定任务 ID；空跑全部
+	UseRealLLM     bool                   // true → ResolveStrict 真道（agent+judge 共用）
+	ConfigPath     string                 // 真道 LLM provider YAML
+	OutDir         string                 // 报告落盘目录；空则不落盘
+	TrajDBPath     string                 // trajectory 落库路径；空串不落库
+	HistoryOut     string                 // PII-free verdict JSONL 追加路径；空则不写
+	Commit         string                 // history 行的 commit SHA
+	MemoryDBPath   string                 // 长期 reflection memory.db 路径；空串不启用
+	MemoryWrite    bool                   // true = 把本次 reflection observation 写回 memory；默认 false
+	MemoryLimit    int                    // <=0 使用 provider 默认值
+	MemoryMinScore float64                // 长期 memory 最低分；0 表示不过滤
+	TaskClass      string                 // 可选 trajectory.task_class 覆盖；空串默认 benchmark
 }
 
 // seedTaskDB 实现 fixture 三级解析（YAML > Go > -db 共享库），返回连接 + 清理函数。
@@ -142,6 +147,7 @@ func runPass(
 			TrajDB:             trajDB,
 			AgentLLM:           agentLLM,
 			ReflectionProvider: provider,
+			TaskClass:          opts.TaskClass,
 		})
 		cleanup()
 		if err != nil {

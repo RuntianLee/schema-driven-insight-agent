@@ -3,10 +3,14 @@ package evalcli
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	evalpkg "github.com/RuntianLee/schema-driven-insight-agent/eval_harness"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
+	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/reflexion"
+	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
 )
 
 // fakeLLM 无状态、由 prompt 驱动：
@@ -40,7 +44,7 @@ func TestRunAB_ProviderRaisesPassRate(t *testing.T) {
 		SchemaPath: "testdata/ab/schema.yaml",
 		TasksDir:   "testdata/ab/tasks",
 	}
-	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), fakeProvider{}, 3, 1)
+	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), fakeProvider{}, 3, 1, "reflection")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +86,7 @@ func TestRunAB_DesignBeta_CrossTrialAccumulation(t *testing.T) {
 		TasksDir:   "testdata/ab/tasks",
 	}
 	// runs=1（1 个独立样本），attempts=2（每样本 2 次 reflexion 尝试，取第 2 次）。
-	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), &learningProvider{}, 1, 2)
+	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), &learningProvider{}, 1, 2, "reflection")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,5 +98,119 @@ func TestRunAB_DesignBeta_CrossTrialAccumulation(t *testing.T) {
 	}
 	if !ab.Meets20Pct {
 		t.Fatalf("delta=%g 应判定 Meets20Pct", ab.MeanDelta)
+	}
+}
+
+func TestRunAB_PersistsTrajectoryWithABTaskClass(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ab-traj.db")
+	opts := Options{
+		Adapter:    "test",
+		SchemaPath: "testdata/ab/schema.yaml",
+		TasksDir:   "testdata/ab/tasks",
+		TrajDBPath: dbPath,
+	}
+
+	_, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), &learningProvider{}, 1, 2, "reflection")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := trajectory.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM trajectories`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("trajectories=%d want 3 (baseline + 2 reflection attempts)", n)
+	}
+	for _, tc := range []string{
+		"benchmark:ab:baseline",
+		"benchmark:ab:reflection:attempt1",
+		"benchmark:ab:reflection:attempt2",
+	} {
+		if err := db.QueryRow(`SELECT count(*) FROM trajectories WHERE task_class=?`, tc).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("task_class %q count=%d want 1", tc, n)
+		}
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM eval_results WHERE evaluator_name='data_correctness'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("eval_results data_correctness rows=%d want 3", n)
+	}
+}
+
+func TestReflectionProviderForABUsesTransientWhenMemoryDBEmpty(t *testing.T) {
+	p, cleanup, label, err := reflectionProviderForAB(Options{Adapter: "b3"}, fakeLLM{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if label != "reflection" {
+		t.Fatalf("label=%q want reflection", label)
+	}
+	if _, ok := p.(*reflexion.Provider); !ok {
+		t.Fatalf("provider type=%T want *reflexion.Provider", p)
+	}
+}
+
+func TestReflectionProviderForABUsesPersistentWhenMemoryDBSet(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	p, cleanup, label, err := reflectionProviderForAB(Options{
+		Adapter:      "b3",
+		MemoryDBPath: dbPath,
+		MemoryLimit:  3,
+	}, fakeLLM{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if label != "reflection+memory" {
+		t.Fatalf("label=%q want reflection+memory", label)
+	}
+	if _, ok := p.(*reflexion.PersistentProvider); !ok {
+		t.Fatalf("provider type=%T want *reflexion.PersistentProvider", p)
+	}
+}
+
+func TestAnnotateMemoryABReportSetsHitTypeBreakdown(t *testing.T) {
+	ab := &evalpkg.ABReport{LabelA: "baseline", LabelB: "reflection+memory"}
+	opts := Options{Adapter: "b3", MemoryDBPath: "memory.db"}
+	hits := reflexion.HitStats{SameClass: 2, SimilarQuestion: 1}
+	annotateMemoryABReport(ab, opts, "reflection+memory", "snap", "snap", hits)
+	if ab.MemoryHitsExactTask != 0 {
+		t.Fatalf("MemoryHitsExactTask=%d want 0", ab.MemoryHitsExactTask)
+	}
+	if ab.MemoryHitsSameClass != 2 {
+		t.Fatalf("MemoryHitsSameClass=%d want 2", ab.MemoryHitsSameClass)
+	}
+	if ab.MemoryHitsSimilarQuestion != 1 {
+		t.Fatalf("MemoryHitsSimilarQuestion=%d want 1", ab.MemoryHitsSimilarQuestion)
+	}
+}
+
+func TestAnnotateMemoryABReportMarksReadOnlySnapshotInstability(t *testing.T) {
+	ab := &evalpkg.ABReport{LabelA: "baseline", LabelB: "reflection+memory"}
+	opts := Options{Adapter: "b3", MemoryDBPath: filepath.Join(t.TempDir(), "memory.db")}
+	annotateMemoryABReport(ab, opts, "reflection+memory", "before", "after", reflexion.HitStats{})
+	if !ab.MemoryEnabled {
+		t.Fatal("memory should be enabled")
+	}
+	if ab.MemorySnapshotStable {
+		t.Fatal("snapshot should be unstable")
+	}
+	if !strings.Contains(ab.Caveat, "Memory snapshot changed") {
+		t.Fatalf("missing snapshot caveat: %q", ab.Caveat)
+	}
+	if ab.MemoryRetrievalPolicy != "same_task_then_similar_question" {
+		t.Fatalf("policy=%q", ab.MemoryRetrievalPolicy)
 	}
 }

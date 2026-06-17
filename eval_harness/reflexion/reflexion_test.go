@@ -61,6 +61,26 @@ func TestProvider_ObserveFail_ThenContextHasLesson(t *testing.T) {
 	}
 }
 
+func TestProviderObserveAndUpdateReturnsFixQueryObservation(t *testing.T) {
+	llm := &fakeReflectLLM{out: "下次先确认过滤口径。"}
+	p := New(llm)
+	obs, err := p.observeAndUpdate(context.Background(), failRes("t1"), map[string]evaluators.Score{
+		"data_correctness": {Evaluator: "data_correctness", Pass: false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.mode != observationFixQuery {
+		t.Fatalf("mode=%q want %q", obs.mode, observationFixQuery)
+	}
+	if obs.lesson != "下次先确认过滤口径。" {
+		t.Fatalf("lesson=%q", obs.lesson)
+	}
+	if llm.calls != 1 {
+		t.Fatalf("reflect llm calls=%d want 1", llm.calls)
+	}
+}
+
 func TestProvider_ObservePass_NoLesson(t *testing.T) {
 	llm := &fakeReflectLLM{out: "不该出现"}
 	p := New(llm)
@@ -155,5 +175,34 @@ func TestProvider_RefineMode_QueryCorrectReasoningWeak(t *testing.T) {
 	}
 	if !strings.Contains(got, "未给运营含义") {
 		t.Fatalf("ContextFor 应带上 reasoning 反馈，得 %q", got)
+	}
+}
+
+func TestProviderObserveAndUpdateReturnsRefineObservation(t *testing.T) {
+	llm := &fakeReflectLLM{out: "不该被调用"}
+	p := New(llm)
+	res := evaluators.TaskResult{
+		TaskID:   "t1",
+		Question: "各服玩家数？",
+		Answer:   "（过于简略的解读）",
+		ToolCalls: []evaluators.ToolCall{
+			{Name: "analyze", Args: map[string]any{"group_by": []any{"server_id"}}},
+		},
+	}
+	obs, err := p.observeAndUpdate(context.Background(), res, map[string]evaluators.Score{
+		"data_correctness":  {Pass: true},
+		"reasoning_quality": {BelowMin: true, Detail: "未给运营含义"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.mode != observationRefineExplanation {
+		t.Fatalf("mode=%q want %q", obs.mode, observationRefineExplanation)
+	}
+	if obs.refine.feedback != "未给运营含义" {
+		t.Fatalf("feedback=%q", obs.refine.feedback)
+	}
+	if llm.calls != 0 {
+		t.Fatalf("refine should not call reflect llm, got %d", llm.calls)
 	}
 }

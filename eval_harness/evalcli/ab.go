@@ -2,9 +2,14 @@
 package evalcli
 
 import (
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/eino_agent"
@@ -13,7 +18,9 @@ import (
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/runners"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/tasks"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
+	"github.com/RuntianLee/schema-driven-insight-agent/memory"
 	"github.com/RuntianLee/schema-driven-insight-agent/schema_protocol"
+	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
 )
 
 // RunAB 解析真 LLM client（agent+judge+reflect 共用），跑 Design β A/B。
@@ -26,16 +33,91 @@ func RunAB(opts Options, runs, attempts int) (*evalpkg.ABReport, error) {
 	if err != nil {
 		return nil, fmt.Errorf("真 LLM 初始化失败: %w", err)
 	}
-	var provider runners.ReflectionProvider
-	if attempts >= 1 {
-		provider = reflexion.New(real) // reflect LLM 复用真道
+	provider, cleanup, labelB, err := reflectionProviderForAB(opts, real)
+	if err != nil {
+		return nil, err
 	}
-	return runABWithClients(opts, real, real, provider, runs, attempts)
+	defer cleanup()
+	snapshotBefore := memorySnapshotID(opts.MemoryDBPath)
+	ab, err := runABWithClients(opts, real, real, provider, runs, attempts, labelB)
+	if err != nil {
+		return nil, err
+	}
+	snapshotAfter := memorySnapshotID(opts.MemoryDBPath)
+	var hits reflexion.HitStats
+	if pp, ok := provider.(*reflexion.PersistentProvider); ok {
+		hits = pp.HitStats()
+	}
+	annotateMemoryABReport(ab, opts, labelB, snapshotBefore, snapshotAfter, hits)
+	return ab, nil
+}
+
+func reflectionProviderForAB(opts Options, reflectLLM llm.Client) (runners.ReflectionProvider, func(), string, error) {
+	if opts.MemoryDBPath == "" {
+		return reflexion.New(reflectLLM), func() {}, "reflection", nil
+	}
+
+	db, err := memory.Open(opts.MemoryDBPath)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("open memory db %s: %w", opts.MemoryDBPath, err)
+	}
+	if err := memory.Migrate(db); err != nil {
+		db.Close()
+		return nil, nil, "", fmt.Errorf("migrate memory db: %w", err)
+	}
+	allowedFields, err := allowedFieldsForMemory(opts.SchemaPath)
+	if err != nil {
+		db.Close()
+		return nil, nil, "", err
+	}
+	store := memory.NewSQLiteStore(db)
+	provider := reflexion.NewPersistent(reflectLLM, store, reflexion.PersistentOptions{
+		Adapter:             opts.Adapter,
+		TaskClass:           "benchmark",
+		ContextOptions:      memory.ContextOptions{MaxItems: opts.MemoryLimit, MaxChars: 1600},
+		Limit:               opts.MemoryLimit,
+		MinScore:            opts.MemoryMinScore,
+		PersistObservations: opts.MemoryWrite,
+		AllowedFields:       allowedFields,
+	})
+	cleanup := func() { _ = store.Close() }
+	return provider, cleanup, "reflection+memory", nil
+}
+
+func allowedFieldsForMemory(schemaPath string) ([]string, error) {
+	if schemaPath == "" {
+		return nil, nil
+	}
+	schemaData, err := os.ReadFile(schemaPath)
+	if err != nil {
+		return nil, fmt.Errorf("read schema %s for memory fields: %w", schemaPath, err)
+	}
+	schema, err := schema_protocol.Parse(schemaData)
+	if err != nil {
+		return nil, fmt.Errorf("parse schema for memory fields: %w", err)
+	}
+	seen := map[string]bool{}
+	for _, tbl := range schema.StateTables {
+		for field := range tbl.Fields {
+			seen[field] = true
+		}
+	}
+	for _, tbl := range schema.DerivedTables {
+		for field := range tbl.Fields {
+			seen[field] = true
+		}
+	}
+	fields := make([]string, 0, len(seen))
+	for field := range seen {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	return fields, nil
 }
 
 // runABWithClients 是 RunAB 的可测内核：client/provider 由调用方注入（测试传 fake）。
 // config A（baseline）：provider=nil 冷跑 1 次；config B：每样本 Reset 后跑 attempts 次 reflexion，取末次。
-func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners.ReflectionProvider, runs, attempts int) (*evalpkg.ABReport, error) {
+func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners.ReflectionProvider, runs, attempts int, labelB string) (*evalpkg.ABReport, error) {
 	if runs <= 0 {
 		return nil, fmt.Errorf("runs 必须 > 0")
 	}
@@ -55,10 +137,15 @@ func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners
 		return nil, fmt.Errorf("load tasks %s: %w", opts.TasksDir, err)
 	}
 
-	// trajDB 恒传 nil：A/B 只产出 ABReport 聚合。
+	trajDB, cleanup, err := trajectoryDBForAB(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
 	var aReports, bReports []*evalpkg.Report
 	for i := 0; i < runs; i++ {
-		ra, err := runPass(schema, taskList, opts, agentLLM, judge, nil, nil) // A: baseline 冷跑 1 次
+		ra, err := runPass(schema, taskList, withTaskClass(opts, "benchmark:ab:baseline"), agentLLM, judge, nil, trajDB) // A: baseline 冷跑 1 次
 		if err != nil {
 			return nil, fmt.Errorf("A run %d: %w", i, err)
 		}
@@ -68,7 +155,8 @@ func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners
 		}
 		var rb *evalpkg.Report
 		for k := 0; k < attempts; k++ {
-			rb, err = runPass(schema, taskList, opts, agentLLM, judge, provider, nil) // B: 第 k 次 reflexion 尝试
+			taskClass := fmt.Sprintf("benchmark:ab:%s:attempt%d", labelB, k+1)
+			rb, err = runPass(schema, taskList, withTaskClass(opts, taskClass), agentLLM, judge, provider, trajDB) // B: 第 k 次 reflexion 尝试
 			if err != nil {
 				return nil, fmt.Errorf("B run %d attempt %d: %w", i, k, err)
 			}
@@ -76,7 +164,90 @@ func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners
 		aReports = append(aReports, ra)
 		bReports = append(bReports, rb) // 只把第 attempts 次（收敛后）计入聚合
 	}
-	return evalpkg.BuildABReport("baseline", "reflection", runs, aReports, bReports)
+	return evalpkg.BuildABReport("baseline", labelB, runs, aReports, bReports)
+}
+
+func trajectoryDBForAB(opts Options) (*sql.DB, func(), error) {
+	if opts.TrajDBPath == "" {
+		return nil, func() {}, nil
+	}
+	db, err := trajectory.Open(opts.TrajDBPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open trajectory db %s: %w", opts.TrajDBPath, err)
+	}
+	if err := trajectory.Migrate(db); err != nil {
+		db.Close()
+		return nil, nil, fmt.Errorf("migrate trajectory db: %w", err)
+	}
+	return db, func() { _ = db.Close() }, nil
+}
+
+func withTaskClass(opts Options, taskClass string) Options {
+	opts.TaskClass = taskClass
+	return opts
+}
+
+func memorySnapshotID(path string) string {
+	if path == "" {
+		return ""
+	}
+	parts := []string{path, path + "-wal"}
+	h := sha256.New()
+	wrote := false
+	for _, p := range parts {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		h.Write([]byte(p))
+		h.Write([]byte{0})
+		h.Write(data)
+		wrote = true
+	}
+	if !wrote {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func annotateMemoryABReport(ab *evalpkg.ABReport, opts Options, labelB, snapshotBefore, snapshotAfter string, hits reflexion.HitStats) {
+	if ab == nil {
+		return
+	}
+	ab.ReflectionMode = labelB
+	ab.MemoryEnabled = opts.MemoryDBPath != ""
+	ab.MemoryDBPath = opts.MemoryDBPath
+	ab.MemorySnapshot = snapshotBefore
+	ab.MemorySnapshotBefore = snapshotBefore
+	ab.MemorySnapshotAfter = snapshotAfter
+	ab.MemorySnapshotStable = snapshotBefore != "" && snapshotBefore == snapshotAfter
+	ab.MemoryWrite = opts.MemoryWrite
+	ab.MemoryRetrievalPolicy = memoryRetrievalPolicy(opts)
+	ab.MemoryHitsExactTask = hits.ExactTask
+	ab.MemoryHitsSameClass = hits.SameClass
+	ab.MemoryHitsSimilarQuestion = hits.SimilarQuestion
+	if ab.MemoryEnabled && !ab.MemoryWrite && !ab.MemorySnapshotStable {
+		appendABCaveat(ab, "Memory snapshot changed during read-only A/B run; do not treat this report as a fixed-snapshot measurement.")
+	}
+}
+
+func memoryRetrievalPolicy(opts Options) string {
+	if opts.MemoryDBPath == "" {
+		return ""
+	}
+	return "same_task_then_similar_question"
+}
+
+func appendABCaveat(ab *evalpkg.ABReport, msg string) {
+	msg = strings.TrimSpace(msg)
+	if ab == nil || msg == "" {
+		return
+	}
+	if strings.TrimSpace(ab.Caveat) == "" {
+		ab.Caveat = msg
+		return
+	}
+	ab.Caveat = strings.TrimSpace(ab.Caveat) + "\n" + msg
 }
 
 // FinishAB 打印 A/B 摘要、落盘 JSON（off-gate：恒返回 0）。

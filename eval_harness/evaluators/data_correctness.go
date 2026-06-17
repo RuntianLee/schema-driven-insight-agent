@@ -29,6 +29,12 @@ type dcTableRow struct {
 	Match     map[string]string  `yaml:"match"`
 	Expect    map[string]float64 `yaml:"expect"`     // 按列名（别名）断言：确定性 mock 道用
 	ExpectPos map[int]float64    `yaml:"expect_pos"` // 按列绝对位置断言：真 LLM 道别名鲁棒（agent 自选 as 别名时仍可比对）
+	ExpectAny []dcTableExpectAny `yaml:"expect_any"` // 候选列名任一命中即可，避免 count 等前置列造成列序误判
+}
+
+type dcTableExpectAny struct {
+	Columns []string `yaml:"columns"`
+	Value   float64  `yaml:"value"`
 }
 
 type dcSpec struct {
@@ -53,11 +59,24 @@ func (d *DataCorrectness) Evaluate(_ context.Context, res TaskResult, spec *yaml
 	if err := spec.Decode(&sp); err != nil {
 		return Score{}, fmt.Errorf("decode data_correctness spec: %w", err)
 	}
-	resp, ok := findToolResponse(res, sp.Tool)
-	if !ok {
+	responses := findToolResponses(res, sp.Tool)
+	if len(responses) == 0 {
 		return fail(d.Name(), fmt.Sprintf("未找到 tool %q 的调用", sp.Tool)), nil
 	}
 
+	var allFails []string
+	for i, resp := range responses {
+		fails := checkResponse(resp, sp)
+		if len(fails) == 0 {
+			return Score{Evaluator: d.Name(), Value: 1.0, Pass: true, Display: "1.00 ✓"}, nil
+		}
+		allFails = append(allFails, fmt.Sprintf("调用%d: %s", i+1, strings.Join(fails, "; ")))
+	}
+
+	return fail(d.Name(), strings.Join(allFails, " | ")), nil
+}
+
+func checkResponse(resp contract.Response, sp dcSpec) []string {
 	var fails []string
 	if sp.ExpectStatus != "" && string(resp.Status) != sp.ExpectStatus {
 		fails = append(fails, fmt.Sprintf("status=%s want %s", resp.Status, sp.ExpectStatus))
@@ -74,36 +93,21 @@ func (d *DataCorrectness) Evaluate(_ context.Context, res TaskResult, spec *yaml
 	for _, tr := range sp.Table {
 		fails = append(fails, checkTable(resp.Table, tr)...)
 	}
-
-	if len(fails) > 0 {
-		return fail(d.Name(), strings.Join(fails, "; ")), nil
-	}
-	return Score{Evaluator: d.Name(), Value: 1.0, Pass: true, Display: "1.00 ✓"}, nil
+	return fails
 }
 
-// findToolResponse 选取 tool 的最终有效调用：agent 允许 SCHEMA_ERROR 后自修正重试
-// （prompt 约定），故优先取最后一次成功（Err==nil 且 Status==OK）的同名调用；
-// 无成功调用则回退最后一次 Err==nil 的调用（保留失败 Response 供 expect_status 断言）。
-func findToolResponse(res TaskResult, tool string) (contract.Response, bool) {
-	var lastOK, lastNoErr *contract.Response
+// findToolResponses 返回同名 tool 的所有无运行错误响应。真实轨迹里 agent 可能
+// 先完成核心查询再补充查询，data_correctness 应允许任一有效响应满足断言。
+func findToolResponses(res TaskResult, tool string) []contract.Response {
+	var responses []contract.Response
 	for i := range res.ToolCalls {
 		tc := res.ToolCalls[i]
 		if tc.Name != tool || tc.Err != nil {
 			continue
 		}
-		resp := tc.Response
-		lastNoErr = &resp
-		if resp.Status == contract.StatusOK {
-			lastOK = &resp
-		}
+		responses = append(responses, tc.Response)
 	}
-	if lastOK != nil {
-		return *lastOK, true
-	}
-	if lastNoErr != nil {
-		return *lastNoErr, true
-	}
-	return contract.Response{}, false
+	return responses
 }
 
 func checkProfile(p *contract.DistProfile, want map[string]float64) []string {
@@ -221,7 +225,7 @@ func checkTable(tr *contract.TableResult, want dcTableRow) []string {
 	}
 	for _, row := range tr.Rows {
 		if tableRowMatches(row, idx, want.Match) {
-			return checkTableExpect(row, idx, want.Match, want.Expect, want.ExpectPos)
+			return checkTableExpect(row, idx, want.Match, want.Expect, want.ExpectPos, want.ExpectAny)
 		}
 	}
 	return []string{fmt.Sprintf("未找到匹配行 %v", want.Match)}
@@ -237,7 +241,7 @@ func tableRowMatches(row []any, idx map[string]int, match map[string]string) boo
 	return true
 }
 
-func checkTableExpect(row []any, idx map[string]int, match map[string]string, expect map[string]float64, expectPos map[int]float64) []string {
+func checkTableExpect(row []any, idx map[string]int, match map[string]string, expect map[string]float64, expectPos map[int]float64, expectAny []dcTableExpectAny) []string {
 	var fails []string
 	for k, v := range expect {
 		i, ok := idx[k]
@@ -268,7 +272,34 @@ func checkTableExpect(row []any, idx map[string]int, match map[string]string, ex
 			fails = append(fails, fmt.Sprintf("table%v.[col %d]=%g want %g", match, i, got, v))
 		}
 	}
+	for _, anyExpect := range expectAny {
+		fails = append(fails, checkTableExpectAny(row, idx, match, anyExpect)...)
+	}
 	return fails
+}
+
+func checkTableExpectAny(row []any, idx map[string]int, match map[string]string, expect dcTableExpectAny) []string {
+	if len(expect.Columns) == 0 {
+		return []string{fmt.Sprintf("table%v.expect_any 缺少 columns", match)}
+	}
+	var tried []string
+	for _, col := range expect.Columns {
+		i, ok := idx[col]
+		if !ok || i >= len(row) {
+			tried = append(tried, col+"=<missing>")
+			continue
+		}
+		got, ok := cellToFloat(row[i])
+		if !ok {
+			tried = append(tried, col+"=<non-numeric>")
+			continue
+		}
+		if floatEq(got, expect.Value) {
+			return nil
+		}
+		tried = append(tried, fmt.Sprintf("%s=%g", col, got))
+	}
+	return []string{fmt.Sprintf("table%v.expect_any none of %v matched %g (tried %s)", match, expect.Columns, expect.Value, strings.Join(tried, ", "))}
 }
 
 func cellToString(v any) string {

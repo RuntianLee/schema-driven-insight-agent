@@ -60,6 +60,10 @@ func buildFixtureDB(s *schema_protocol.Schema, node yaml.Node, dir string) (*sql
 			return nil, err
 		}
 	}
+	if err := buildFixtureDerivedTables(db, s); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
 }
 
@@ -107,4 +111,101 @@ func buildFixtureTable(db *sql.DB, s *schema_protocol.Schema, table string, ft f
 		}
 	}
 	return tx.Commit()
+}
+
+func buildFixtureDerivedTables(db *sql.DB, s *schema_protocol.Schema) error {
+	derivedNames := make([]string, 0, len(s.DerivedTables))
+	for name := range s.DerivedTables {
+		derivedNames = append(derivedNames, name)
+	}
+	sort.Strings(derivedNames)
+	for _, name := range derivedNames {
+		tbl := s.DerivedTables[name]
+		switch tbl.Method {
+		case "pivot_money_columns":
+			if err := buildFixturePivotMoneyTable(db, s, name, tbl); err != nil {
+				return fmt.Errorf("fixture 派生表 %s: %w", name, err)
+			}
+		case "":
+			continue
+		default:
+			return fmt.Errorf("fixture 暂不支持派生表 %s method=%q", name, tbl.Method)
+		}
+	}
+	return nil
+}
+
+func buildFixturePivotMoneyTable(db *sql.DB, s *schema_protocol.Schema, dest string, tbl schema_protocol.Table) error {
+	if tbl.DerivedFrom == "" {
+		return fmt.Errorf("缺少 derived_from")
+	}
+	exists, err := fixtureTableExists(db, tbl.DerivedFrom)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	pidCol, err := singleFieldByRole(tbl.Fields, "actor_id")
+	if err != nil {
+		return err
+	}
+	kindCol, err := singleFieldByRole(tbl.Fields, "currency_kind")
+	if err != nil {
+		return err
+	}
+	balanceCol, err := singleFieldByRole(tbl.Fields, "balance")
+	if err != nil {
+		return err
+	}
+	moneyCols, err := etl.MoneyColumnsFor(s, tbl.DerivedFrom)
+	if err != nil {
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(fmt.Sprintf(`DROP TABLE IF EXISTS %s`, dest)); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`CREATE TABLE %s (%s TEXT, %s TEXT, %s INTEGER)`, dest, pidCol, kindCol, balanceCol)); err != nil {
+		return err
+	}
+	for _, mc := range moneyCols {
+		if _, err := tx.Exec(
+			fmt.Sprintf(`INSERT INTO %s (%s, %s, %s) SELECT CAST(rowid AS TEXT), ?, %s FROM %s`, dest, pidCol, kindCol, balanceCol, mc.Column, tbl.DerivedFrom),
+			mc.CurrencyType,
+		); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`CREATE INDEX idx_%s_%s_%s ON %s(%s, %s)`, dest, kindCol, balanceCol, dest, kindCol, balanceCol)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func fixtureTableExists(db *sql.DB, table string) (bool, error) {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func singleFieldByRole(fields map[string]schema_protocol.FieldDef, role string) (string, error) {
+	var found []string
+	for name, fd := range fields {
+		if fd.Role == role {
+			found = append(found, name)
+		}
+	}
+	sort.Strings(found)
+	if len(found) != 1 {
+		return "", fmt.Errorf("role=%s 字段数量=%d，期望 1", role, len(found))
+	}
+	return found[0], nil
 }

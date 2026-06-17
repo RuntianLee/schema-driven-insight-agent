@@ -259,6 +259,20 @@ func TestParseToolCall(t *testing.T) {
 			want:  want{isTool: true, tool: "query_distribution"},
 		},
 		{
+			name:  "wrapped non-strict tool call keys",
+			input: "[TOOL_CALL]\n{tool: \"analyze\", args: {\"table\": \"player_basics\", \"aggregates\": [{\"fn\": \"count\", \"as\": \"n\"}]}}\n[/TOOL_CALL]",
+			want:  want{isTool: true, tool: "analyze"},
+		},
+		{
+			name: "minimax xml invoke args",
+			input: `<minimax:tool_call>
+<invoke name="analyze">
+<parameter name="args">{"aggregates":[{"as":"n","fn":"count"}],"group_by":["server_id"],"table":"player_basics"}</parameter>
+</invoke>
+</minimax:tool_call>`,
+			want: want{isTool: true, tool: "analyze"},
+		},
+		{
 			name:  "markdown fenced block",
 			input: "```json\n{\"tool\":\"query_distribution\",\"args\":{}}\n```",
 			want:  want{isTool: true, tool: "query_distribution"},

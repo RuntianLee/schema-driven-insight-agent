@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
+	"regexp"
 	"strings"
 	"time"
 
@@ -128,12 +130,49 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 // 使用 json.Decoder 读取单个 JSON 值，忽略尾部的 markers/fences/prose 等多余内容。
 func parseToolCall(s string) (toolCall, bool) {
 	trimmed := strings.TrimSpace(s)
+	if c, ok := parseMinimaxXMLToolCall(trimmed); ok {
+		return c, true
+	}
 	start := strings.Index(trimmed, "{")
 	if start < 0 {
 		return toolCall{}, false
 	}
+	if c, ok := decodeToolCall(trimmed[start:]); ok {
+		return c, true
+	}
+	return decodeToolCall(quoteBareJSONKeys(trimmed[start:]))
+}
+
+var minimaxXMLToolCallPattern = regexp.MustCompile(`(?s)<invoke\s+name=["']([^"']+)["'][^>]*>.*?<parameter\s+name=["']args["'][^>]*>(.*?)</parameter>`)
+
+func parseMinimaxXMLToolCall(s string) (toolCall, bool) {
+	m := minimaxXMLToolCallPattern.FindStringSubmatch(s)
+	if len(m) != 3 {
+		return toolCall{}, false
+	}
+	argsText := strings.TrimSpace(html.UnescapeString(m[2]))
+	args, ok := decodeToolArgs(argsText)
+	if !ok {
+		args, ok = decodeToolArgs(quoteBareJSONKeys(argsText))
+		if !ok {
+			return toolCall{}, false
+		}
+	}
+	return toolCall{Tool: m[1], Args: args}, true
+}
+
+func decodeToolArgs(s string) (map[string]any, bool) {
+	var args map[string]any
+	dec := json.NewDecoder(strings.NewReader(s))
+	if err := dec.Decode(&args); err != nil {
+		return nil, false
+	}
+	return args, true
+}
+
+func decodeToolCall(s string) (toolCall, bool) {
 	var c toolCall
-	dec := json.NewDecoder(strings.NewReader(trimmed[start:]))
+	dec := json.NewDecoder(strings.NewReader(s))
 	if err := dec.Decode(&c); err != nil {
 		return toolCall{}, false
 	}
@@ -141,6 +180,12 @@ func parseToolCall(s string) (toolCall, bool) {
 		return toolCall{}, false
 	}
 	return c, true
+}
+
+var bareJSONKeyPattern = regexp.MustCompile(`([{\s,])([A-Za-z_][A-Za-z0-9_]*)\s*:`)
+
+func quoteBareJSONKeys(s string) string {
+	return bareJSONKeyPattern.ReplaceAllString(s, `$1"$2":`)
 }
 
 // canonicalToolKey 把 tool 调用规范化为去重 key：tool 名 + args 的 JSON。

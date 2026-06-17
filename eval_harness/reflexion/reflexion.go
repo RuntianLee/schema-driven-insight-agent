@@ -24,6 +24,20 @@ type refineHint struct {
 	feedback   string                // reasoning judge 指出的解读不足
 }
 
+type observationMode string
+
+const (
+	observationNone              observationMode = ""
+	observationFixQuery          observationMode = "fix-query"
+	observationRefineExplanation observationMode = "refine-explanation"
+)
+
+type observation struct {
+	mode   observationMode
+	lesson string
+	refine refineHint
+}
+
 // Provider 是分域 Reflexion 的有状态实现。
 type Provider struct {
 	reflectLLM llm.Client
@@ -64,21 +78,29 @@ func (p *Provider) ContextFor(_ context.Context, taskID, _ string) (string, erro
 //   - data_correctness 未过 → fix-query（自我批判蒸经验，修查询）；
 //   - 全过 → 无需反思。
 func (p *Provider) Observe(ctx context.Context, res evaluators.TaskResult, scores map[string]evaluators.Score) error {
+	_, err := p.observeAndUpdate(ctx, res, scores)
+	return err
+}
+
+func (p *Provider) observeAndUpdate(ctx context.Context, res evaluators.TaskResult, scores map[string]evaluators.Score) (observation, error) {
 	dc, hasDC := scores["data_correctness"]
 	rq, hasRQ := scores["reasoning_quality"]
 	switch {
 	case hasDC && dc.Pass && hasRQ && rq.BelowMin:
-		p.refine[res.TaskID] = refineHint{queryCalls: res.ToolCalls, feedback: rq.Detail}
+		h := refineHint{queryCalls: res.ToolCalls, feedback: rq.Detail}
+		p.refine[res.TaskID] = h
+		return observation{mode: observationRefineExplanation, refine: h}, nil
 	case hasDC && !dc.Pass:
 		out, _, _, _, err := p.reflectLLM.Call(ctx, buildReflectPrompt(res))
 		if err != nil {
-			return err
+			return observation{}, err
 		}
 		if l := strings.TrimSpace(out); l != "" {
 			p.lessons[res.TaskID] = append(p.lessons[res.TaskID], l)
+			return observation{mode: observationFixQuery, lesson: l}, nil
 		}
 	}
-	return nil
+	return observation{mode: observationNone}, nil
 }
 
 // Reset 清空所有状态，供每个独立 reflexion 序列冷起。
