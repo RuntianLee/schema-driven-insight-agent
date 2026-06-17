@@ -135,9 +135,11 @@ func TestPersistentProviderObserveDropsSchemaUnknownFieldNames(t *testing.T) {
 	}
 }
 
-func TestPersistentProviderObservePersistsRefineExplanationAsTemplate(t *testing.T) {
+func TestPersistentProviderObservePersistsDistilledRefineLesson(t *testing.T) {
 	store := &fakeMemoryStore{}
-	p := NewPersistent(&fakeReflectLLM{out: "不该被调用"}, store, PersistentOptions{
+	// 写入相对 refine-explanation 也蒸馏一条可迁移方法教训（reflect LLM 返回它）。
+	reflect := &fakeReflectLLM{out: "解读均值类指标时要点出头部/长尾扭曲并给出分布判断（如 server_id=3 的 42.7%）"}
+	p := NewPersistent(reflect, store, PersistentOptions{
 		Adapter:             "b3",
 		TaskClass:           "benchmark",
 		PersistObservations: true,
@@ -156,7 +158,7 @@ func TestPersistentProviderObservePersistsRefineExplanationAsTemplate(t *testing
 	}
 	err := p.Observe(context.Background(), res, map[string]evaluators.Score{
 		"data_correctness":  {Pass: true},
-		"reasoning_quality": {BelowMin: true, Detail: "golden 期望答案是 server_id=3 的 D7 retention 最高，为 42.7%"},
+		"reasoning_quality": {BelowMin: true, Detail: "未点出均值被头部拉高、未给分布判断"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -169,16 +171,22 @@ func TestPersistentProviderObservePersistsRefineExplanationAsTemplate(t *testing
 	if !hasAll(item.Tags, "reflection", "refine-explanation") {
 		t.Fatalf("tags=%v", item.Tags)
 	}
-	if !strings.Contains(item.Summary, "查询口径已经通过") {
-		t.Fatalf("summary should be template, got %q", item.Summary)
+	// 持久化的是蒸馏出的【具体方法教训】，不再是通用模板串。
+	if strings.Contains(item.Summary, "查询口径已经通过") {
+		t.Fatalf("should persist distilled lesson, not generic template: %q", item.Summary)
 	}
-	assertNoPersistentLeak(t, item, "golden", "server_id=3", "42.7", "原回答", "filters")
+	if !strings.Contains(item.Summary, "分布判断") {
+		t.Fatalf("distilled method lesson missing from summary: %q", item.Summary)
+	}
+	// 即便蒸馏文本回带了字面量，持久化仍须脱敏。
+	assertNoPersistentLeak(t, item, "server_id=3", "42.7")
 
+	// 短期 refine 上下文不变：仍保留原始 judge 反馈（零额外 LLM 在 in-session 路径）。
 	short, err := p.ContextFor(context.Background(), "t1", "如何分析留存")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(short, "golden 期望答案") {
+	if !strings.Contains(short, "未点出均值被头部拉高") {
 		t.Fatalf("short-term refine context should retain judge feedback: %q", short)
 	}
 }

@@ -82,6 +82,14 @@ func (p *PersistentProvider) Observe(ctx context.Context, res evaluators.TaskRes
 		return nil
 	}
 
+	// refine-explanation：写入相额外蒸馏一条【可迁移的解读方法教训】（而非固定模板串），
+	// 让长期记忆携带具体口径/分布/结构经验。仅在写入路径付这次 LLM 调用，in-session refine 仍零额外调用。
+	if obs.mode == observationRefineExplanation {
+		if lesson := p.distillRefineLesson(ctx, res, obs.refine.feedback); lesson != "" {
+			obs.lesson = lesson
+		}
+	}
+
 	item, ok := memoryItemFromObservation(p.opts, res, obs)
 	if !ok {
 		return nil
@@ -197,12 +205,38 @@ func persistentObservationText(obs observation, tools []string, allowedFields []
 		summary = persistentMemoryText(obs.lesson, allowedFields)
 		outline = "下次优先校验工具形态、过滤口径、分组/聚合参数和 caveat；只把该条 memory 当作方法经验。"
 	case observationRefineExplanation:
-		summary = "查询口径已经通过 data_correctness；后续应复用同一查询口径，只改进解读完整性。"
+		if strings.TrimSpace(obs.lesson) != "" {
+			summary = persistentMemoryText(obs.lesson, allowedFields)
+		} else {
+			summary = "查询口径已经通过 data_correctness；后续应复用同一查询口径，只改进解读完整性。"
+		}
 		outline = "使用 " + strings.Join(tools, ", ") + " 复查同一口径，补足关键结论、量化对比、运营建议和数据局限。"
 	default:
 		return "", ""
 	}
 	return summary, persistentMemoryText(outline, allowedFields)
+}
+
+// distillRefineLesson 调 reflect LLM 把"查询已对、解读偏弱"的 judge 反馈蒸成一条可迁移的
+// 解读方法教训。调用失败或空则返回 ""（调用方回退到通用模板）。复用 short.reflectLLM（同包）。
+func (p *PersistentProvider) distillRefineLesson(ctx context.Context, res evaluators.TaskResult, feedback string) string {
+	if p.short == nil || p.short.reflectLLM == nil {
+		return ""
+	}
+	out, _, _, _, err := p.short.reflectLLM.Call(ctx, buildRefineDistillPrompt(res, feedback))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// buildRefineDistillPrompt 用问题 + judge 反馈构造"提炼可迁移解读方法教训"的 prompt。
+// 只要方法/口径层经验，不复述本题数值/字段/结论（脱敏在 persistentMemoryText 再兜底）。
+func buildRefineDistillPrompt(res evaluators.TaskResult, feedback string) string {
+	return fmt.Sprintf(`你对一个数据分析任务的【查询是正确的】，但对结果的【解读】被评审指出偏弱。
+任务问题：%s
+评审指出的解读不足：%s
+请用 1-2 句提炼一条【可迁移的解读方法教训】：只说这类问题在解读时应当补什么口径/分布/结构（例如均值类指标要点出头部或长尾扭曲并给分布判断；哨兵特殊值要辨析业务语义与二义；派生指标要点出口径差异），不要复述本题的具体数值、字段或结论。`, res.Question, feedback)
 }
 
 func toolNames(calls []evaluators.ToolCall) []string {
