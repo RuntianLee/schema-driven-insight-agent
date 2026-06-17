@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS memory_items (
 	tags_json TEXT NOT NULL DEFAULT '[]',
 	tools TEXT GENERATED ALWAYS AS (tools_json) VIRTUAL,
 	tags TEXT GENERATED ALWAYS AS (tags_json) VIRTUAL,
+	-- search_text：应用层 CJK bigram 分词 + ASCII 词（store.go searchTextFor 填充），
+	-- 供 FTS 中文召回（unicode61 对无空格中文整段成单 token，bigram 绕过该缺陷）。
+	search_text TEXT NOT NULL DEFAULT '',
 	score REAL NOT NULL DEFAULT 0,
 	used_count INTEGER NOT NULL DEFAULT 0,
 	last_used_at INTEGER,
@@ -40,25 +43,26 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_items_fts USING fts5(
 	answer_outline,
 	tools,
 	tags,
+	search_text,
 	content='memory_items',
 	content_rowid='rowid'
 );
 
 CREATE TRIGGER IF NOT EXISTS memory_items_ai AFTER INSERT ON memory_items BEGIN
-	INSERT INTO memory_items_fts(rowid, question, summary, answer_outline, tools, tags)
-	VALUES (new.rowid, new.question, new.summary, COALESCE(new.answer_outline, ''), new.tools, new.tags);
+	INSERT INTO memory_items_fts(rowid, question, summary, answer_outline, tools, tags, search_text)
+	VALUES (new.rowid, new.question, new.summary, COALESCE(new.answer_outline, ''), new.tools, new.tags, new.search_text);
 END;
 
 CREATE TRIGGER IF NOT EXISTS memory_items_ad AFTER DELETE ON memory_items BEGIN
-	INSERT INTO memory_items_fts(memory_items_fts, rowid, question, summary, answer_outline, tools, tags)
-	VALUES ('delete', old.rowid, old.question, old.summary, COALESCE(old.answer_outline, ''), old.tools, old.tags);
+	INSERT INTO memory_items_fts(memory_items_fts, rowid, question, summary, answer_outline, tools, tags, search_text)
+	VALUES ('delete', old.rowid, old.question, old.summary, COALESCE(old.answer_outline, ''), old.tools, old.tags, old.search_text);
 END;
 
-CREATE TRIGGER IF NOT EXISTS memory_items_au AFTER UPDATE OF question, summary, answer_outline, tools_json, tags_json ON memory_items BEGIN
-	INSERT INTO memory_items_fts(memory_items_fts, rowid, question, summary, answer_outline, tools, tags)
-	VALUES ('delete', old.rowid, old.question, old.summary, COALESCE(old.answer_outline, ''), old.tools, old.tags);
-	INSERT INTO memory_items_fts(rowid, question, summary, answer_outline, tools, tags)
-	VALUES (new.rowid, new.question, new.summary, COALESCE(new.answer_outline, ''), new.tools, new.tags);
+CREATE TRIGGER IF NOT EXISTS memory_items_au AFTER UPDATE OF question, summary, answer_outline, tools_json, tags_json, search_text ON memory_items BEGIN
+	INSERT INTO memory_items_fts(memory_items_fts, rowid, question, summary, answer_outline, tools, tags, search_text)
+	VALUES ('delete', old.rowid, old.question, old.summary, COALESCE(old.answer_outline, ''), old.tools, old.tags, old.search_text);
+	INSERT INTO memory_items_fts(rowid, question, summary, answer_outline, tools, tags, search_text)
+	VALUES (new.rowid, new.question, new.summary, COALESCE(new.answer_outline, ''), new.tools, new.tags, new.search_text);
 END;
 
 CREATE TABLE IF NOT EXISTS memory_meta (

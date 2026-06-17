@@ -64,11 +64,12 @@ func (s *SQLiteStore) Upsert(ctx context.Context, item Item) (string, error) {
 
 func (s *SQLiteStore) upsertBySource(ctx context.Context, item Item, toolsJSON, tagsJSON string, now int64) (string, error) {
 	var id string
+	searchText := searchTextFor(item)
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO memory_items
 			(item_id, source_type, source_id, adapter, task_id, task_class, question,
-			 summary, answer_outline, tools_json, tags_json, score, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 summary, answer_outline, tools_json, tags_json, search_text, score, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(adapter, source_type, source_id) WHERE source_id IS NOT NULL DO UPDATE SET
 			task_id = excluded.task_id,
 			task_class = excluded.task_class,
@@ -77,6 +78,7 @@ func (s *SQLiteStore) upsertBySource(ctx context.Context, item Item, toolsJSON, 
 			answer_outline = excluded.answer_outline,
 			tools_json = excluded.tools_json,
 			tags_json = excluded.tags_json,
+			search_text = excluded.search_text,
 			score = excluded.score,
 			updated_at = excluded.updated_at
 		RETURNING item_id`,
@@ -91,6 +93,7 @@ func (s *SQLiteStore) upsertBySource(ctx context.Context, item Item, toolsJSON, 
 		nullIfEmpty(item.AnswerOutline),
 		toolsJSON,
 		tagsJSON,
+		searchText,
 		item.Score,
 		now,
 		now,
@@ -103,11 +106,12 @@ func (s *SQLiteStore) upsertBySource(ctx context.Context, item Item, toolsJSON, 
 
 func (s *SQLiteStore) upsertByItemID(ctx context.Context, item Item, toolsJSON, tagsJSON string, now int64) (string, error) {
 	var id string
+	searchText := searchTextFor(item)
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO memory_items
 			(item_id, source_type, source_id, adapter, task_id, task_class, question,
-			 summary, answer_outline, tools_json, tags_json, score, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 summary, answer_outline, tools_json, tags_json, search_text, score, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(item_id) DO UPDATE SET
 			source_type = excluded.source_type,
 			source_id = excluded.source_id,
@@ -119,6 +123,7 @@ func (s *SQLiteStore) upsertByItemID(ctx context.Context, item Item, toolsJSON, 
 			answer_outline = excluded.answer_outline,
 			tools_json = excluded.tools_json,
 			tags_json = excluded.tags_json,
+			search_text = excluded.search_text,
 			score = excluded.score,
 			updated_at = excluded.updated_at
 		RETURNING item_id`,
@@ -133,6 +138,7 @@ func (s *SQLiteStore) upsertByItemID(ctx context.Context, item Item, toolsJSON, 
 		nullIfEmpty(item.AnswerOutline),
 		toolsJSON,
 		tagsJSON,
+		searchText,
 		item.Score,
 		now,
 		now,
@@ -162,7 +168,8 @@ func (s *SQLiteStore) Search(ctx context.Context, q Query) ([]SearchResult, erro
 	if ftsQuery != "" {
 		from = `memory_items_fts f JOIN memory_items m ON f.rowid = m.rowid`
 		selectRank = `bm25(memory_items_fts) AS rank`
-		selectSnippet = `snippet(memory_items_fts, 1, '[', ']', '...', 12) AS snippet`
+		// snippet 用原始 summary（search_text 是分词后 bigram，不适合展示）。
+		selectSnippet = `COALESCE(m.summary, '') AS snippet`
 		where = append(where, `memory_items_fts MATCH ?`)
 		args = append(args, ftsQuery)
 	}
@@ -326,36 +333,78 @@ func validateItem(item Item) error {
 	}
 }
 
+// buildFTSQuery 把查询词（question + tools + tags）切成 CJK bigram + ASCII token，
+// 以 OR 连接（recall 优先；bm25 按重叠数排序，最相关者在前）。每个 token 加引号
+// 防 FTS5 语法字符。空查询返回空串（退化为纯结构化过滤）。
 func buildFTSQuery(q Query) string {
-	tokens := make([]string, 0, 8)
-	tokens = append(tokens, cleanFTSTokens(q.Question)...)
-	for _, tool := range q.Tools {
-		tokens = append(tokens, cleanFTSTokens(tool)...)
-	}
-	for _, tag := range q.Tags {
-		tokens = append(tokens, cleanFTSTokens(tag)...)
-	}
-	if len(tokens) == 0 {
+	parts := make([]string, 0, 1+len(q.Tools)+len(q.Tags))
+	parts = append(parts, q.Question)
+	parts = append(parts, q.Tools...)
+	parts = append(parts, q.Tags...)
+	seg := cjkSegment(strings.Join(parts, " "))
+	if seg == "" {
 		return ""
 	}
-	return strings.Join(tokens, " AND ")
+	tokens := strings.Fields(seg)
+	for i, t := range tokens {
+		tokens[i] = `"` + t + `"`
+	}
+	return strings.Join(tokens, " OR ")
 }
 
-func cleanFTSTokens(s string) []string {
-	fields := strings.Fields(s)
-	tokens := make([]string, 0, len(fields))
-	for _, field := range fields {
-		var b strings.Builder
-		for _, r := range field {
-			if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
-				b.WriteRune(unicode.ToLower(r))
-			}
-		}
-		if b.Len() > 0 {
-			tokens = append(tokens, b.String())
+// searchTextFor 生成写入 FTS 的 search_text：对（已脱敏的）可检索文本做 CJK bigram
+// 分词（中文召回）+ ASCII token。必须在 ScrubItem 之后调用，避免泄漏进 FTS 索引。
+func searchTextFor(item Item) string {
+	parts := []string{item.Question, item.Summary, item.AnswerOutline}
+	parts = append(parts, item.Tools...)
+	parts = append(parts, item.Tags...)
+	return cjkSegment(strings.Join(parts, " "))
+}
+
+// cjkSegment 把文本切成 FTS 友好的空格分隔 token：连续汉字切重叠 bigram，ASCII 词
+// （字母/数字/下划线）整体小写保留，其余字符作分隔。写入与查询共用，保证中文子串
+// 可命中（绕过 unicode61 把无空格中文整段当单 token 的缺陷）。
+func cjkSegment(s string) string {
+	tokens := make([]string, 0, len(s))
+	var ascii strings.Builder
+	var cjk []rune
+	flushASCII := func() {
+		if ascii.Len() > 0 {
+			tokens = append(tokens, ascii.String())
+			ascii.Reset()
 		}
 	}
-	return tokens
+	flushCJK := func() {
+		switch {
+		case len(cjk) == 1:
+			tokens = append(tokens, string(cjk))
+		case len(cjk) >= 2:
+			for i := 0; i+1 < len(cjk); i++ {
+				tokens = append(tokens, string(cjk[i:i+2]))
+			}
+		}
+		cjk = cjk[:0]
+	}
+	for _, r := range s {
+		switch {
+		case isCJK(r):
+			flushASCII()
+			cjk = append(cjk, r)
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_':
+			flushCJK()
+			ascii.WriteRune(unicode.ToLower(r))
+		default:
+			flushASCII()
+			flushCJK()
+		}
+	}
+	flushASCII()
+	flushCJK()
+	return strings.Join(tokens, " ")
+}
+
+func isCJK(r rune) bool {
+	return unicode.Is(unicode.Han, r)
 }
 
 func nullIfEmpty(s string) any {

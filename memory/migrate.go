@@ -11,7 +11,8 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const SchemaVersion = "1"
+// SchemaVersion bumped to "2" when search_text (CJK bigram FTS column) was added.
+const SchemaVersion = "2"
 
 // Open 打开 memory.db 并设置适合本地长期记忆读写的 SQLite pragmas。
 func Open(path string) (*sql.DB, error) {
