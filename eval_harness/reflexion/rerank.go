@@ -18,6 +18,26 @@ var categoryWeight = map[string]float64{
 	"shape": 3, "agg": 1, "dim": 1, "filter": 1, "cmp": 1,
 }
 
+// facetOverlapShape 仅判 shape: 是否对口（口径计数用，不含细标签）。
+func facetOverlapShape(hitTags, queryFacets []string) bool {
+	want := ""
+	for _, f := range queryFacets {
+		if strings.HasPrefix(f, "shape:") {
+			want = f
+			break
+		}
+	}
+	if want == "" {
+		return false
+	}
+	for _, tag := range hitTags {
+		if tag == want {
+			return true
+		}
+	}
+	return false
+}
+
 // Reranker 对召回候选按相关度排序截断。信号可叠加（今接 facet+bm25，留 embedding/usage 位）。
 type Reranker interface {
 	Rerank(hits []memory.SearchResult, queryFacets []string, k int) []memory.SearchResult

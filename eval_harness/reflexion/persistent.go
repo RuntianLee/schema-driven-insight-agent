@@ -12,6 +12,8 @@ import (
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/runners"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
 	"github.com/RuntianLee/schema-driven-insight-agent/memory"
+	"github.com/RuntianLee/schema-driven-insight-agent/schema_protocol"
+	"github.com/RuntianLee/schema-driven-insight-agent/tools"
 )
 
 const defaultPersistentMemoryMaxChars = 1200
@@ -31,6 +33,8 @@ type HitStats struct {
 	ExactTask       int // hit.Item.TaskID == queried taskID
 	SameClass       int // different task but same TaskClass as provider opts
 	SimilarQuestion int // cross-task, different class (everything else)
+	OnFacet         int // 跨任务命中且 shape 与当前任务对口
+	OffFacet        int // 跨任务命中但 shape 不对口（无关注入度量）
 }
 
 type PersistentProvider struct {
@@ -166,7 +170,7 @@ func (p *PersistentProvider) longContextFor(ctx context.Context, taskID, questio
 	return renderReflectionMemory(results, p.opts.ContextOptions)
 }
 
-// classifyHit 累计命中分类计数（ExactTask/SameClass/SimilarQuestion）。
+// classifyHit 累计命中分类计数（ExactTask/SameClass/SimilarQuestion/OnFacet/OffFacet）。
 func (p *PersistentProvider) classifyHit(hit memory.SearchResult, taskID string) {
 	switch {
 	case hit.Item.TaskID == taskID:
@@ -175,6 +179,13 @@ func (p *PersistentProvider) classifyHit(hit memory.SearchResult, taskID string)
 		p.hits.SameClass++
 	default:
 		p.hits.SimilarQuestion++
+	}
+	if hit.Item.TaskID != taskID && len(p.queryFacets) > 0 {
+		if facetOverlapShape(hit.Item.Tags, p.queryFacets) {
+			p.hits.OnFacet++
+		} else {
+			p.hits.OffFacet++
+		}
 	}
 }
 
@@ -203,24 +214,36 @@ func memoryItemFromObservation(opts PersistentOptions, res evaluators.TaskResult
 	if obs.mode == observationNone {
 		return memory.Item{}, false
 	}
-	tools := toolNames(res.ToolCalls)
-	summary, outline := persistentObservationText(obs, tools, opts.AllowedFields)
+	usedTools := toolNames(res.ToolCalls)
+	summary, outline := persistentObservationText(obs, usedTools, opts.AllowedFields)
 	if strings.TrimSpace(summary) == "" {
 		return memory.Item{}, false
 	}
+	tags := []string{"reflection", string(obs.mode)}
+	tags = append(tags, facetsFromToolCalls(res.ToolCalls)...)
 	return memory.Item{
 		SourceType:    "reflection",
-		SourceID:      stableReflectionSourceID(opts.Adapter, res.TaskID, obs.mode, res.Question, tools, summary),
+		SourceID:      stableReflectionSourceID(opts.Adapter, res.TaskID, obs.mode, res.Question, usedTools, summary),
 		Adapter:       opts.Adapter,
 		TaskID:        res.TaskID,
 		TaskClass:     opts.TaskClass,
 		Question:      persistentMemoryText(res.Question, opts.AllowedFields),
 		Summary:       summary,
 		AnswerOutline: outline,
-		Tools:         tools,
-		Tags:          []string{"reflection", string(obs.mode)},
+		Tools:         usedTools,
+		Tags:          tags,
 		Score:         0.8,
 	}, true
+}
+
+// facetsFromToolCalls 从 analyze 调用派生口径标签（写入相打标，供跨任务软重排对口）。
+func facetsFromToolCalls(calls []evaluators.ToolCall) []string {
+	for _, c := range calls {
+		if strings.EqualFold(c.Name, "analyze") {
+			return schema_protocol.DeriveFacets(tools.ArgsToAnalyzeInput(c.Args).Query())
+		}
+	}
+	return nil
 }
 
 func persistentObservationText(obs observation, tools []string, allowedFields []string) (summary, outline string) {

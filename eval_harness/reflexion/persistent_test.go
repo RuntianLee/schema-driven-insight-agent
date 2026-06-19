@@ -410,3 +410,45 @@ func TestLongContextRerankPrefersOnFacet(t *testing.T) {
 		t.Fatalf("rerank 应只保留对口 [on]，实际渲染: %q", out)
 	}
 }
+
+func TestWritePathTagsAnalyzeFacets(t *testing.T) {
+	res := evaluators.TaskResult{
+		TaskID:   "arpu",
+		Question: "各服人均货币",
+		ToolCalls: []evaluators.ToolCall{{
+			Name: "analyze",
+			Args: map[string]any{
+				"table":      "player_basics",
+				"group_by":   []any{"server_id"},
+				"aggregates": []any{map[string]any{"fn": "avg", "column": "virtual_money", "as": "m"}},
+			},
+		}},
+	}
+	obs := observation{mode: observationRefineExplanation, lesson: "均值受头部拉高，应看分布"}
+	item, ok := memoryItemFromObservation(PersistentOptions{Adapter: "b3"}, res, obs)
+	if !ok {
+		t.Fatal("应产出 item")
+	}
+	if !hasTag(item.Tags, "shape:mean") || !hasTag(item.Tags, "agg:avg") {
+		t.Fatalf("写入相应带派生口径标签，实际 Tags=%v", item.Tags)
+	}
+}
+
+func hasTag(tags []string, want string) bool {
+	for _, t := range tags {
+		if t == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestClassifyHitCountsOnOffFacet(t *testing.T) {
+	p := NewPersistent(nil, nil, PersistentOptions{})
+	p.SetQueryFacets([]string{"shape:mean", "agg:avg"})
+	p.classifyHit(memory.SearchResult{Item: memory.Item{TaskID: "x", Tags: []string{"shape:mean"}}}, "cur")
+	p.classifyHit(memory.SearchResult{Item: memory.Item{TaskID: "y", Tags: []string{"shape:sentinel"}}}, "cur")
+	if p.hits.OnFacet != 1 || p.hits.OffFacet != 1 {
+		t.Fatalf("OnFacet=%d OffFacet=%d want 1/1", p.hits.OnFacet, p.hits.OffFacet)
+	}
+}
