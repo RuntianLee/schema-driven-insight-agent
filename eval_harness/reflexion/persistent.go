@@ -115,49 +115,67 @@ func (p *PersistentProvider) longContextFor(ctx context.Context, taskID, questio
 	limit := p.limit()
 	seen := map[string]bool{}
 	results := make([]memory.SearchResult, 0, limit)
-	rounds := []struct {
-		query     memory.Query
-		exactTask bool
-	}{
-		{query: p.query(taskID, question, limit), exactTask: true},
-		{query: p.query(taskID, "", limit), exactTask: true},
-		{query: p.query("", question, limit), exactTask: false},
-	}
 
-	for _, round := range rounds {
+	// round-1/2：exactTask 精确召回，保持原样直接并入。
+	exactRounds := []memory.Query{
+		p.query(taskID, question, limit),
+		p.query(taskID, "", limit),
+	}
+	for _, q := range exactRounds {
 		if len(results) >= limit {
 			break
 		}
-		hits, err := p.store.Search(ctx, round.query)
+		hits, err := p.store.Search(ctx, q)
 		if err != nil {
 			return renderReflectionMemory(results, p.opts.ContextOptions)
 		}
 		for _, hit := range hits {
-			if round.exactTask && hit.Item.TaskID != taskID {
-				continue
-			}
-			if hit.Item.ID == "" {
-				continue
-			}
-			if seen[hit.Item.ID] {
+			if hit.Item.TaskID != taskID || hit.Item.ID == "" || seen[hit.Item.ID] {
 				continue
 			}
 			seen[hit.Item.ID] = true
 			results = append(results, hit)
-			switch {
-			case hit.Item.TaskID == taskID:
-				p.hits.ExactTask++
-			case p.opts.TaskClass != "" && hit.Item.TaskClass == p.opts.TaskClass:
-				p.hits.SameClass++
-			default:
-				p.hits.SimilarQuestion++
-			}
+			p.classifyHit(hit, taskID)
 			if len(results) >= limit {
 				break
 			}
 		}
 	}
+
+	// round-3：跨任务召回 → 收集未见候选 → 软重排 → 取剩余额度。
+	if len(results) < limit {
+		crossHits, err := p.store.Search(ctx, p.query("", question, limit))
+		if err != nil {
+			return renderReflectionMemory(results, p.opts.ContextOptions)
+		}
+		cand := make([]memory.SearchResult, 0, len(crossHits))
+		for _, hit := range crossHits {
+			if hit.Item.ID == "" || seen[hit.Item.ID] {
+				continue
+			}
+			seen[hit.Item.ID] = true
+			cand = append(cand, hit)
+		}
+		ranked := p.reranker.Rerank(cand, p.queryFacets, limit-len(results))
+		for _, hit := range ranked {
+			results = append(results, hit)
+			p.classifyHit(hit, taskID)
+		}
+	}
+
 	return renderReflectionMemory(results, p.opts.ContextOptions)
+}
+
+// classifyHit 累计命中分类计数（ExactTask/SameClass/SimilarQuestion）。
+func (p *PersistentProvider) classifyHit(hit memory.SearchResult, taskID string) {
+	switch {
+	case hit.Item.TaskID == taskID:
+		p.hits.ExactTask++
+	case p.opts.TaskClass != "" && hit.Item.TaskClass == p.opts.TaskClass:
+		p.hits.SameClass++
+	default:
+		p.hits.SimilarQuestion++
+	}
 }
 
 func (p *PersistentProvider) query(taskID, question string, limit int) memory.Query {

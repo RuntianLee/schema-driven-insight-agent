@@ -391,3 +391,22 @@ func TestSetQueryFacetsUpdatesProvider(t *testing.T) {
 		t.Fatalf("queryFacets=%v want [shape:mean agg:avg]", got)
 	}
 }
+
+func TestLongContextRerankPrefersOnFacet(t *testing.T) {
+	store := &fakeMemoryStore{searchFunc: func(q memory.Query) ([]memory.SearchResult, error) {
+		if q.TaskID != "" { // round-1/2 exactTask：无命中
+			return nil, nil
+		}
+		// round-3 跨任务：不对口(强 bm25 -9) + 对口(弱 bm25 -0.1)
+		return []memory.SearchResult{
+			{Item: memory.Item{ID: "off", TaskID: "t_other", Tags: []string{"reflection", "shape:sentinel"}}, Rank: -9},
+			{Item: memory.Item{ID: "on", TaskID: "t_other", Tags: []string{"reflection", "shape:mean", "agg:avg", "dim:1"}}, Rank: -0.1},
+		}, nil
+	}}
+	p := NewPersistent(nil, store, PersistentOptions{Limit: 1, ContextOptions: memory.ContextOptions{MaxItems: 1}})
+	p.SetQueryFacets([]string{"shape:mean", "agg:avg", "dim:1"})
+	out := p.longContextFor(context.Background(), "t_current", "各服人均货币")
+	if !strings.Contains(out, "[on]") || strings.Contains(out, "[off]") {
+		t.Fatalf("rerank 应只保留对口 [on]，实际渲染: %q", out)
+	}
+}
