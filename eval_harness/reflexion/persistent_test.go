@@ -383,3 +383,11 @@ func assertNoPersistentLeak(t *testing.T, item memory.Item, needles ...string) {
 		}
 	}
 }
+
+func TestSetQueryFacetsUpdatesProvider(t *testing.T) {
+	p := NewPersistent(nil, nil, PersistentOptions{})
+	p.SetQueryFacets([]string{"shape:mean", "agg:avg"})
+	if got := p.queryFacets; len(got) != 2 || got[0] != "shape:mean" {
+		t.Fatalf("queryFacets=%v want [shape:mean agg:avg]", got)
+	}
+}

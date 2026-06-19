@@ -34,17 +34,20 @@ type HitStats struct {
 }
 
 type PersistentProvider struct {
-	short *Provider
-	store memory.Store
-	opts  PersistentOptions
-	hits  HitStats
+	short       *Provider
+	store       memory.Store
+	opts        PersistentOptions
+	hits        HitStats
+	reranker    Reranker
+	queryFacets []string
 }
 
 func NewPersistent(reflectLLM llm.Client, store memory.Store, opts PersistentOptions) *PersistentProvider {
 	return &PersistentProvider{
-		short: New(reflectLLM),
-		store: store,
-		opts:  opts,
+		short:    New(reflectLLM),
+		store:    store,
+		opts:     opts,
+		reranker: newFacetBM25Reranker(),
 	}
 }
 
@@ -104,6 +107,9 @@ func (p *PersistentProvider) Reset() {
 
 // HitStats returns the cumulative memory hit classification counts for this provider's lifetime.
 func (p *PersistentProvider) HitStats() HitStats { return p.hits }
+
+// SetQueryFacets 设置当前任务的口径标签（每任务切换时由 runner 调用，驱动跨任务召回的软重排）。
+func (p *PersistentProvider) SetQueryFacets(facets []string) { p.queryFacets = facets }
 
 func (p *PersistentProvider) longContextFor(ctx context.Context, taskID, question string) string {
 	limit := p.limit()
