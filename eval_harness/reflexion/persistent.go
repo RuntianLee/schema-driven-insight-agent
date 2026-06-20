@@ -147,8 +147,10 @@ func (p *PersistentProvider) longContextFor(ctx context.Context, taskID, questio
 	}
 
 	// round-3：跨任务召回 → 收集未见候选 → 软重排 → 取剩余额度。
+	// 召回宽度与注入 cap 解耦：召回须够宽（crossRecallBreadth），rerank 才有候选可排；
+	// 否则 limit 小（如 1）时召回只取 bm25 top-1，对口教训 bm25 排名靠后就进不了候选、无法被重排提前（off-facet 漏注入）。
 	if len(results) < limit {
-		crossHits, err := p.store.Search(ctx, p.query("", question, limit))
+		crossHits, err := p.store.Search(ctx, p.query("", question, crossRecallBreadth(limit)))
 		if err != nil {
 			return renderReflectionMemory(results, p.opts.ContextOptions)
 		}
@@ -208,6 +210,18 @@ func (p *PersistentProvider) limit() int {
 		return p.opts.ContextOptions.MaxItems
 	}
 	return 5
+}
+
+// minCrossRecall 是跨任务召回的最小宽度：给 rerank 足够候选，与注入 cap 解耦。
+const minCrossRecall = 20
+
+// crossRecallBreadth 返回 round-3 跨任务召回宽度。须 ≥ 注入 cap，且不小于 minCrossRecall，
+// 否则 rerank 拿不到足够候选（对口教训 bm25 排名靠后时会被召回截断挡在门外）。
+func crossRecallBreadth(injectCap int) int {
+	if injectCap > minCrossRecall {
+		return injectCap
+	}
+	return minCrossRecall
 }
 
 func memoryItemFromObservation(opts PersistentOptions, res evaluators.TaskResult, obs observation) (memory.Item, bool) {

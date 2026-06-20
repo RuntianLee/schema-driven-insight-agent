@@ -452,3 +452,36 @@ func TestClassifyHitCountsOnOffFacet(t *testing.T) {
 		t.Fatalf("OnFacet=%d OffFacet=%d want 1/1", p.hits.OnFacet, p.hits.OffFacet)
 	}
 }
+
+// TestLongContextRecallBreadthDecoupledFromInjectCap 复现并守护「召回宽度 vs 注入 cap 解耦」修复：
+// inject cap=1 但对口教训 bm25 排名靠后（off-facet 占据 bm25 前列）。fake 尊重 q.Limit，
+// 故若召回宽度=inject cap=1，对口教训进不了候选 → off 漏注入（修复前的 §B bug）。
+// 解耦后召回宽度=crossRecallBreadth(1)=minCrossRecall，对口教训进窗 → 重排提前 → 截断保留它。
+func TestLongContextRecallBreadthDecoupledFromInjectCap(t *testing.T) {
+	all := []memory.SearchResult{
+		{Item: memory.Item{ID: "off0", TaskID: "t_other", Tags: []string{"reflection", "shape:sentinel"}}, Rank: -9},
+		{Item: memory.Item{ID: "off1", TaskID: "t_other", Tags: []string{"reflection", "shape:sentinel"}}, Rank: -8},
+		{Item: memory.Item{ID: "on", TaskID: "t_other", Tags: []string{"reflection", "shape:mean", "agg:avg", "dim:1"}}, Rank: -1},
+	}
+	var round3Limit int
+	store := &fakeMemoryStore{searchFunc: func(q memory.Query) ([]memory.SearchResult, error) {
+		if q.TaskID != "" { // round-1/2 exactTask：无命中
+			return nil, nil
+		}
+		round3Limit = q.Limit
+		n := q.Limit // 尊重召回宽度：窄则截断（复现 bug 条件）
+		if n > len(all) {
+			n = len(all)
+		}
+		return all[:n], nil
+	}}
+	p := NewPersistent(nil, store, PersistentOptions{Limit: 1, ContextOptions: memory.ContextOptions{MaxItems: 1}})
+	p.SetQueryFacets([]string{"shape:mean", "agg:avg", "dim:1"})
+	out := p.longContextFor(context.Background(), "t_current", "各服人均货币")
+	if round3Limit < minCrossRecall {
+		t.Fatalf("round-3 召回宽度=%d 应 ≥ minCrossRecall=%d（与 inject cap=1 解耦）", round3Limit, minCrossRecall)
+	}
+	if !strings.Contains(out, "[on]") || strings.Contains(out, "[off") {
+		t.Fatalf("对口教训虽 bm25 弱但在召回窗内，应被重排提前并保留；实际: %q", out)
+	}
+}
