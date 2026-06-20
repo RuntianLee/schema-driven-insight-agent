@@ -21,6 +21,14 @@ type AnalyzeInput struct {
 	Limit      int
 }
 
+// Query 把 AnalyzeInput 转换为 schema_protocol.AnalysisQuery，供内部及上层直接复用。
+func (in AnalyzeInput) Query() schema_protocol.AnalysisQuery {
+	return schema_protocol.AnalysisQuery{
+		Table: in.Table, Filters: in.Filters, GroupBy: in.GroupBy,
+		Aggregates: in.Aggregates, Having: in.Having, OrderBy: in.OrderBy, Limit: in.Limit,
+	}
+}
+
 // AnalyzeTool 执行通用可组合查询（V2 路线 B）。Layer2 只读 SQLite。
 type AnalyzeTool struct {
 	schema *schema_protocol.Schema
@@ -34,10 +42,7 @@ func NewAnalyzeTool(s *schema_protocol.Schema, db *sql.DB) *AnalyzeTool {
 // Run 不返回 error：四状态覆盖全部失败语义（design-v3 §10）。
 // 校验失败 → SCHEMA_ERROR + hint 让 agent 自修正；执行成功 → OK + Table。
 func (t *AnalyzeTool) Run(ctx context.Context, in AnalyzeInput) contract.Response {
-	q := schema_protocol.AnalysisQuery{
-		Table: in.Table, Filters: in.Filters, GroupBy: in.GroupBy,
-		Aggregates: in.Aggregates, Having: in.Having, OrderBy: in.OrderBy, Limit: in.Limit,
-	}
+	q := in.Query()
 	sqlText, args, err := t.schema.BuildAnalysis(q)
 	if err != nil {
 		var se *schema_protocol.SchemaError

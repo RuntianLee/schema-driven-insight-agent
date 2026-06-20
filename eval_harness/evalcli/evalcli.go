@@ -8,9 +8,11 @@ package evalcli
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
@@ -118,6 +120,9 @@ func runPass(
 	for _, task := range taskList {
 		if opts.OnlyTask != "" && task.ID != opts.OnlyTask {
 			continue
+		}
+		if sp, ok := provider.(interface{ SetQueryFacets([]string) }); ok {
+			sp.SetQueryFacets(facetsForTask(task))
 		}
 		db, cleanup, err := seedTaskDB(schema, task, opts)
 		if err != nil {
@@ -251,6 +256,26 @@ func mergeInto(dst, src *evalpkg.Report) {
 			}
 		}
 	}
+}
+
+// facetsForTask 取任务口径标签：显式 facets override 优先，否则从 golden 首个 analyze turn 派生。
+func facetsForTask(task tasks.Task) []string {
+	if len(task.Facets) > 0 {
+		return task.Facets
+	}
+	for _, turn := range task.LLMTurns {
+		var call struct {
+			Tool string         `json:"tool"`
+			Args map[string]any `json:"args"`
+		}
+		if err := json.Unmarshal([]byte(turn), &call); err != nil {
+			continue
+		}
+		if strings.EqualFold(call.Tool, "analyze") {
+			return schema_protocol.DeriveFacets(tools.ArgsToAnalyzeInput(call.Args).Query())
+		}
+	}
+	return nil
 }
 
 func writeReports(rep *evalpkg.Report, dir string) error {

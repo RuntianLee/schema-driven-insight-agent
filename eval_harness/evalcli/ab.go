@@ -226,6 +226,8 @@ func annotateMemoryABReport(ab *evalpkg.ABReport, opts Options, labelB, snapshot
 	ab.MemoryHitsExactTask = hits.ExactTask
 	ab.MemoryHitsSameClass = hits.SameClass
 	ab.MemoryHitsSimilarQuestion = hits.SimilarQuestion
+	ab.MemoryHitsOnFacet = hits.OnFacet
+	ab.MemoryHitsOffFacet = hits.OffFacet
 	if ab.MemoryEnabled && !ab.MemoryWrite && !ab.MemorySnapshotStable {
 		appendABCaveat(ab, "Memory snapshot changed during read-only A/B run; do not treat this report as a fixed-snapshot measurement.")
 	}

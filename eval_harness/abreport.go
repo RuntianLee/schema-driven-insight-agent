@@ -53,6 +53,8 @@ type ABReport struct {
 	MemoryHitsExactTask       int           `json:"memory_hits_exact_task"`
 	MemoryHitsSameClass       int           `json:"memory_hits_same_class"`
 	MemoryHitsSimilarQuestion int           `json:"memory_hits_similar_question"`
+	MemoryHitsOnFacet         int           `json:"memory_hits_on_facet"`
+	MemoryHitsOffFacet        int           `json:"memory_hits_off_facet"`
 	Caveat                    string        `json:"caveat,omitempty"`
 }
 

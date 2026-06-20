@@ -18,6 +18,7 @@ type Task struct {
 	ID         string               `yaml:"id"`
 	Title      string               `yaml:"title"`
 	Question   string               `yaml:"question"`
+	Facets     []string             `yaml:"facets"` // 可选：override 自动派生（结构测不出的哨兵等）
 	LLMTurns   []string             `yaml:"llm_turns"`
 	Evaluators map[string]yaml.Node `yaml:"evaluators"`
 	Fixture    yaml.Node            `yaml:"fixture"` // 可选内联 fixture（evalcli 解码；零值=未声明）

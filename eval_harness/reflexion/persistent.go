@@ -12,6 +12,8 @@ import (
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/runners"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
 	"github.com/RuntianLee/schema-driven-insight-agent/memory"
+	"github.com/RuntianLee/schema-driven-insight-agent/schema_protocol"
+	"github.com/RuntianLee/schema-driven-insight-agent/tools"
 )
 
 const defaultPersistentMemoryMaxChars = 1200
@@ -31,20 +33,25 @@ type HitStats struct {
 	ExactTask       int // hit.Item.TaskID == queried taskID
 	SameClass       int // different task but same TaskClass as provider opts
 	SimilarQuestion int // cross-task, different class (everything else)
+	OnFacet         int // 跨任务命中且 shape 与当前任务对口
+	OffFacet        int // 跨任务命中但 shape 不对口（无关注入度量）
 }
 
 type PersistentProvider struct {
-	short *Provider
-	store memory.Store
-	opts  PersistentOptions
-	hits  HitStats
+	short       *Provider
+	store       memory.Store
+	opts        PersistentOptions
+	hits        HitStats
+	reranker    Reranker
+	queryFacets []string
 }
 
 func NewPersistent(reflectLLM llm.Client, store memory.Store, opts PersistentOptions) *PersistentProvider {
 	return &PersistentProvider{
-		short: New(reflectLLM),
-		store: store,
-		opts:  opts,
+		short:    New(reflectLLM),
+		store:    store,
+		opts:     opts,
+		reranker: newFacetBM25Reranker(),
 	}
 }
 
@@ -105,53 +112,83 @@ func (p *PersistentProvider) Reset() {
 // HitStats returns the cumulative memory hit classification counts for this provider's lifetime.
 func (p *PersistentProvider) HitStats() HitStats { return p.hits }
 
+// SetQueryFacets 设置当前任务的口径标签（每任务切换时由 runner 调用，驱动跨任务召回的软重排）。
+func (p *PersistentProvider) SetQueryFacets(facets []string) { p.queryFacets = facets }
+
 func (p *PersistentProvider) longContextFor(ctx context.Context, taskID, question string) string {
 	limit := p.limit()
 	seen := map[string]bool{}
 	results := make([]memory.SearchResult, 0, limit)
-	rounds := []struct {
-		query     memory.Query
-		exactTask bool
-	}{
-		{query: p.query(taskID, question, limit), exactTask: true},
-		{query: p.query(taskID, "", limit), exactTask: true},
-		{query: p.query("", question, limit), exactTask: false},
-	}
 
-	for _, round := range rounds {
+	// round-1/2：exactTask 精确召回，保持原样直接并入。
+	exactRounds := []memory.Query{
+		p.query(taskID, question, limit),
+		p.query(taskID, "", limit),
+	}
+	for _, q := range exactRounds {
 		if len(results) >= limit {
 			break
 		}
-		hits, err := p.store.Search(ctx, round.query)
+		hits, err := p.store.Search(ctx, q)
 		if err != nil {
 			return renderReflectionMemory(results, p.opts.ContextOptions)
 		}
 		for _, hit := range hits {
-			if round.exactTask && hit.Item.TaskID != taskID {
-				continue
-			}
-			if hit.Item.ID == "" {
-				continue
-			}
-			if seen[hit.Item.ID] {
+			if hit.Item.TaskID != taskID || hit.Item.ID == "" || seen[hit.Item.ID] {
 				continue
 			}
 			seen[hit.Item.ID] = true
 			results = append(results, hit)
-			switch {
-			case hit.Item.TaskID == taskID:
-				p.hits.ExactTask++
-			case p.opts.TaskClass != "" && hit.Item.TaskClass == p.opts.TaskClass:
-				p.hits.SameClass++
-			default:
-				p.hits.SimilarQuestion++
-			}
+			p.classifyHit(hit, taskID)
 			if len(results) >= limit {
 				break
 			}
 		}
 	}
+
+	// round-3：跨任务召回 → 收集未见候选 → 软重排 → 取剩余额度。
+	// 召回宽度与注入 cap 解耦：召回须够宽（crossRecallBreadth），rerank 才有候选可排；
+	// 否则 limit 小（如 1）时召回只取 bm25 top-1，对口教训 bm25 排名靠后就进不了候选、无法被重排提前（off-facet 漏注入）。
+	if len(results) < limit {
+		crossHits, err := p.store.Search(ctx, p.query("", question, crossRecallBreadth(limit)))
+		if err != nil {
+			return renderReflectionMemory(results, p.opts.ContextOptions)
+		}
+		cand := make([]memory.SearchResult, 0, len(crossHits))
+		for _, hit := range crossHits {
+			if hit.Item.ID == "" || seen[hit.Item.ID] {
+				continue
+			}
+			seen[hit.Item.ID] = true
+			cand = append(cand, hit)
+		}
+		ranked := p.reranker.Rerank(cand, p.queryFacets, limit-len(results))
+		for _, hit := range ranked {
+			results = append(results, hit)
+			p.classifyHit(hit, taskID)
+		}
+	}
+
 	return renderReflectionMemory(results, p.opts.ContextOptions)
+}
+
+// classifyHit 累计命中分类计数（ExactTask/SameClass/SimilarQuestion/OnFacet/OffFacet）。
+func (p *PersistentProvider) classifyHit(hit memory.SearchResult, taskID string) {
+	switch {
+	case hit.Item.TaskID == taskID:
+		p.hits.ExactTask++
+	case p.opts.TaskClass != "" && hit.Item.TaskClass == p.opts.TaskClass:
+		p.hits.SameClass++
+	default:
+		p.hits.SimilarQuestion++
+	}
+	if hit.Item.TaskID != taskID && len(p.queryFacets) > 0 {
+		if facetOverlapShape(hit.Item.Tags, p.queryFacets) {
+			p.hits.OnFacet++
+		} else {
+			p.hits.OffFacet++
+		}
+	}
 }
 
 func (p *PersistentProvider) query(taskID, question string, limit int) memory.Query {
@@ -175,28 +212,52 @@ func (p *PersistentProvider) limit() int {
 	return 5
 }
 
+// minCrossRecall 是跨任务召回的最小宽度：给 rerank 足够候选，与注入 cap 解耦。
+const minCrossRecall = 20
+
+// crossRecallBreadth 返回 round-3 跨任务召回宽度。须 ≥ 注入 cap，且不小于 minCrossRecall，
+// 否则 rerank 拿不到足够候选（对口教训 bm25 排名靠后时会被召回截断挡在门外）。
+func crossRecallBreadth(injectCap int) int {
+	if injectCap > minCrossRecall {
+		return injectCap
+	}
+	return minCrossRecall
+}
+
 func memoryItemFromObservation(opts PersistentOptions, res evaluators.TaskResult, obs observation) (memory.Item, bool) {
 	if obs.mode == observationNone {
 		return memory.Item{}, false
 	}
-	tools := toolNames(res.ToolCalls)
-	summary, outline := persistentObservationText(obs, tools, opts.AllowedFields)
+	usedTools := toolNames(res.ToolCalls)
+	summary, outline := persistentObservationText(obs, usedTools, opts.AllowedFields)
 	if strings.TrimSpace(summary) == "" {
 		return memory.Item{}, false
 	}
+	tags := []string{"reflection", string(obs.mode)}
+	tags = append(tags, facetsFromToolCalls(res.ToolCalls)...)
 	return memory.Item{
 		SourceType:    "reflection",
-		SourceID:      stableReflectionSourceID(opts.Adapter, res.TaskID, obs.mode, res.Question, tools, summary),
+		SourceID:      stableReflectionSourceID(opts.Adapter, res.TaskID, obs.mode, res.Question, usedTools, summary),
 		Adapter:       opts.Adapter,
 		TaskID:        res.TaskID,
 		TaskClass:     opts.TaskClass,
 		Question:      persistentMemoryText(res.Question, opts.AllowedFields),
 		Summary:       summary,
 		AnswerOutline: outline,
-		Tools:         tools,
-		Tags:          []string{"reflection", string(obs.mode)},
+		Tools:         usedTools,
+		Tags:          tags,
 		Score:         0.8,
 	}, true
+}
+
+// facetsFromToolCalls 从 analyze 调用派生口径标签（写入相打标，供跨任务软重排对口）。
+func facetsFromToolCalls(calls []evaluators.ToolCall) []string {
+	for _, c := range calls {
+		if strings.EqualFold(c.Name, "analyze") {
+			return schema_protocol.DeriveFacets(tools.ArgsToAnalyzeInput(c.Args).Query())
+		}
+	}
+	return nil
 }
 
 func persistentObservationText(obs observation, tools []string, allowedFields []string) (summary, outline string) {

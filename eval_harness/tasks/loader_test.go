@@ -52,3 +52,15 @@ func TestLoadDirRejectsMissingID(t *testing.T) {
 		t.Fatalf("missing id must error")
 	}
 }
+
+func TestLoadTaskFacetsOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeTask(t, dir, "s.yaml", "id: s\nquestion: q\nfacets: [\"shape:sentinel\"]\nllm_turns: [\"t1\"]\nevaluators:\n  reasoning_quality:\n    rubric: r\n")
+	got, err := LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || len(got[0].Facets) != 1 || got[0].Facets[0] != "shape:sentinel" {
+		t.Fatalf("Facets=%v want [shape:sentinel]", got[0].Facets)
+	}
+}
