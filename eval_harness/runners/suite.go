@@ -1,5 +1,5 @@
 // framework/eval_harness/runners/suite.go
-// Package runners 提供 eval harness 的编排层：sequencedMock + captureStore + RunSuite。
+// Package runners 提供 eval harness 的编排层：sequencedMock + trajcapture + RunSuite。
 package runners
 
 import (
@@ -13,6 +13,7 @@ import (
 	evalpkg "github.com/RuntianLee/schema-driven-insight-agent/eval_harness"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
+	"github.com/RuntianLee/schema-driven-insight-agent/trajcapture"
 	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
@@ -54,12 +55,12 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		if agentClient == nil {
 			agentClient = newSequencedMock(task.LLMTurns)
 		}
-		capture := newCaptureStore()
+		capture := trajcapture.New()
 		var store agent.TrajectoryStore = capture
 		var trajID string
 		if cfg.TrajDB != nil {
 			if rec, err := trajectory.New(ctx, cfg.TrajDB, eino_agent.AgentVersion, task.Question, taskClass(cfg)); err == nil {
-				tee := newTeeStore(capture, rec)
+				tee := trajcapture.NewTee(capture, rec)
 				store = tee
 				trajID = tee.TrajectoryID()
 			}
@@ -76,8 +77,8 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 			TaskID:    task.ID,
 			Question:  task.Question,
 			Answer:    answer,
-			Outcome:   capture.outcome,
-			ToolCalls: capture.toolCalls,
+			Outcome:   capture.Outcome(),
+			ToolCalls: capture.ToolCalls(),
 			RunErr:    runErr,
 		}
 
