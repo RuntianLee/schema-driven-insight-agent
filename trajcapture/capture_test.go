@@ -3,6 +3,7 @@ package trajcapture
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -28,5 +29,37 @@ func TestCaptureToolCallsAndAnalystResults(t *testing.T) {
 	}
 	if rs[0].Call.Name != "analyze" {
 		t.Errorf("rs[0].Call.Name=%q", rs[0].Call.Name)
+	}
+}
+
+// TestRecordToolCall_NonResponseOutput 验证 output 非 contract.Response（类型不匹配）时，
+// Err 必须被设为非 nil（类型断言失败路径）。
+func TestRecordToolCall_NonResponseOutput(t *testing.T) {
+	c := New()
+	c.RecordToolCall("weird", nil, "not a Response", time.Now(), time.Now(), nil)
+	tcs := c.ToolCalls()
+	if len(tcs) != 1 {
+		t.Fatalf("ToolCalls len=%d want 1", len(tcs))
+	}
+	if tcs[0].Err == nil {
+		t.Fatal("output 非 contract.Response 时 ToolCall.Err 应非 nil，实为 nil")
+	}
+}
+
+// TestRecordToolCall_DispatchErr 验证调用方传入非 nil dispatch err 时，
+// 该 err 被原样保留在 ToolCall.Err（dispatch 错误优先路径）。
+func TestRecordToolCall_DispatchErr(t *testing.T) {
+	c := New()
+	boom := errors.New("dispatch: timeout")
+	c.RecordToolCall("query_distribution", nil, contract.Response{}, time.Now(), time.Now(), boom)
+	tcs := c.ToolCalls()
+	if len(tcs) != 1 {
+		t.Fatalf("ToolCalls len=%d want 1", len(tcs))
+	}
+	if tcs[0].Err == nil {
+		t.Fatal("dispatch err 应被保留在 ToolCall.Err，实为 nil")
+	}
+	if !errors.Is(tcs[0].Err, boom) {
+		t.Errorf("ToolCall.Err=%v，want errors.Is(..., boom)", tcs[0].Err)
 	}
 }
