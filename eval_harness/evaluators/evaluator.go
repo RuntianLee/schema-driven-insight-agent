@@ -10,22 +10,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ToolCall 是 captureStore 捕获的单次 tool 调用快照。
-type ToolCall struct {
-	Name     string
-	Args     map[string]any
-	Response contract.Response
-	Err      error
-}
-
 // TaskResult 是一个任务跑完 agent 后、喂给 evaluator 的被测输出。
 type TaskResult struct {
 	TaskID    string
 	Question  string
 	Answer    string
 	Outcome   string
-	ToolCalls []ToolCall
+	ToolCalls []contract.ToolCall
 	RunErr    error
+	// Advisory 是 Analyst→Advisor 流水线产出的建议草案；nil = 本任务未跑 Advisor。
+	Advisory *contract.AdvisoryDraft
 }
 
 // Score 是单个 evaluator 对单个任务的评分。

@@ -8,10 +8,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type stubEval struct{ name string; det bool }
+type stubEval struct {
+	name string
+	det  bool
+}
 
-func (s stubEval) Name() string          { return s.name }
-func (s stubEval) Deterministic() bool    { return s.det }
+func (s stubEval) Name() string        { return s.name }
+func (s stubEval) Deterministic() bool { return s.det }
 func (s stubEval) Evaluate(_ context.Context, _ TaskResult, _ *yaml.Node) (Score, error) {
 	return Score{Evaluator: s.name, Value: 1.0, Pass: true}, nil
 }

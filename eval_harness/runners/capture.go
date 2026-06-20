@@ -8,7 +8,6 @@ import (
 
 	"github.com/RuntianLee/schema-driven-insight-agent/agent"
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
-	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
 )
 
 // captureStore 实现 agent.TrajectoryStore，把 trajectory 捕获进内存（不落 SQLite）。
@@ -19,7 +18,7 @@ import (
 // WHERE task_class='production' 过滤掉 benchmark 行；data_correctness 走真 tool（连
 // fixture），verdict 可信——这正是跨版本对比的有效信号。
 type captureStore struct {
-	toolCalls []evaluators.ToolCall
+	toolCalls []contract.ToolCall
 	outcome   string
 	finalOut  string
 }
@@ -32,7 +31,7 @@ func (c *captureStore) RecordLLMCall(_, _, _ string, _, _ int, _ float64, _, _ t
 }
 
 func (c *captureStore) RecordToolCall(name string, input, output any, _, _ time.Time, err error) {
-	tc := evaluators.ToolCall{Name: name, Err: err}
+	tc := contract.ToolCall{Name: name, Err: err}
 	// eino_agent 的 ToolDispatcher 始终以 map[string]any 传 tool 入参（解析自 LLM 的 tool-call JSON），
 	// 故此断言恒成立；非 map 入参（理论上不出现）则 Args 留 nil，不致命。
 	if m, ok := input.(map[string]any); ok {

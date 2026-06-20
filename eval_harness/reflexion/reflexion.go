@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/RuntianLee/schema-driven-insight-agent/contract"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/runners"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
@@ -20,8 +21,8 @@ import (
 
 // refineHint：上次查询正确、仅解读弱时的提示——复用原查询、只改进解读。
 type refineHint struct {
-	queryCalls []evaluators.ToolCall // 上次【正确】的工具调用（原样复用，避免二次查询出错）
-	feedback   string                // reasoning judge 指出的解读不足
+	queryCalls []contract.ToolCall // 上次【正确】的工具调用（原样复用，避免二次查询出错）
+	feedback   string              // reasoning judge 指出的解读不足
 }
 
 type observationMode string

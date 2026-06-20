@@ -26,7 +26,7 @@ func failRes(taskID string) evaluators.TaskResult {
 		TaskID:   taskID,
 		Question: "各服玩家数？",
 		Answer:   "（错答）",
-		ToolCalls: []evaluators.ToolCall{
+		ToolCalls: []contract.ToolCall{
 			{Name: "analyze", Args: map[string]any{"group_by": []any{"wrong_field"}},
 				Response: contract.Response{Status: contract.StatusSchemaError}},
 		},
@@ -128,7 +128,7 @@ func TestProvider_NoRefine_WhenReasoningOK(t *testing.T) {
 		TaskID:    "t1",
 		Question:  "各服玩家数？",
 		Answer:    "（解读已充分）",
-		ToolCalls: []evaluators.ToolCall{{Name: "analyze", Args: map[string]any{"group_by": []any{"server_id"}}}},
+		ToolCalls: []contract.ToolCall{{Name: "analyze", Args: map[string]any{"group_by": []any{"server_id"}}}},
 	}
 	// data_correctness 通过、reasoning_quality 未低于阈值（BelowMin=false）→ 不应进 refine 模式
 	scores := map[string]evaluators.Score{
@@ -154,7 +154,7 @@ func TestProvider_RefineMode_QueryCorrectReasoningWeak(t *testing.T) {
 		TaskID:   "t1",
 		Question: "各服玩家数？",
 		Answer:   "（过于简略的解读）",
-		ToolCalls: []evaluators.ToolCall{
+		ToolCalls: []contract.ToolCall{
 			{Name: "analyze", Args: map[string]any{"group_by": []any{"server_id"}}},
 		},
 	}
@@ -185,7 +185,7 @@ func TestProviderObserveAndUpdateReturnsRefineObservation(t *testing.T) {
 		TaskID:   "t1",
 		Question: "各服玩家数？",
 		Answer:   "（过于简略的解读）",
-		ToolCalls: []evaluators.ToolCall{
+		ToolCalls: []contract.ToolCall{
 			{Name: "analyze", Args: map[string]any{"group_by": []any{"server_id"}}},
 		},
 	}

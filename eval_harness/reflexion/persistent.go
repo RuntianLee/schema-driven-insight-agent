@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/RuntianLee/schema-driven-insight-agent/contract"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/runners"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
@@ -251,7 +252,7 @@ func memoryItemFromObservation(opts PersistentOptions, res evaluators.TaskResult
 }
 
 // facetsFromToolCalls 从 analyze 调用派生口径标签（写入相打标，供跨任务软重排对口）。
-func facetsFromToolCalls(calls []evaluators.ToolCall) []string {
+func facetsFromToolCalls(calls []contract.ToolCall) []string {
 	for _, c := range calls {
 		if strings.EqualFold(c.Name, "analyze") {
 			return schema_protocol.DeriveFacets(tools.ArgsToAnalyzeInput(c.Args).Query())
@@ -300,7 +301,7 @@ func buildRefineDistillPrompt(res evaluators.TaskResult, feedback string) string
 请用 1-2 句提炼一条【可迁移的解读方法教训】：只说这类问题在解读时应当补什么口径/分布/结构（例如均值类指标要点出头部或长尾扭曲并给分布判断；哨兵特殊值要辨析业务语义与二义；派生指标要点出口径差异），不要复述本题的具体数值、字段或结论。`, res.Question, feedback)
 }
 
-func toolNames(calls []evaluators.ToolCall) []string {
+func toolNames(calls []contract.ToolCall) []string {
 	seen := map[string]bool{}
 	names := make([]string, 0, len(calls))
 	for _, call := range calls {
