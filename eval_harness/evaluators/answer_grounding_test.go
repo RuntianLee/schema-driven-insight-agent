@@ -2,11 +2,13 @@ package evaluators
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
+	"github.com/RuntianLee/schema-driven-insight-agent/llm"
 	"gopkg.in/yaml.v3"
 )
 
@@ -81,5 +83,53 @@ func TestAnswerGrounding_ErroredNotFolded(t *testing.T) {
 	}
 	if !sc.Errored || sc.Value != 0 {
 		t.Fatalf("耗尽重试应 Errored 且不向上 error: %+v", sc)
+	}
+}
+
+// TestAnswerGrounding_RealLLM_Discriminates 是真 LLM 判别力冒烟（阶梯①）：
+// 默认 skip，仅 AG_SMOKE=1 时跑，避免日常烧 token。
+// 凭证：ResolveStrict 读 AG_CONFIG 指向的配置文件；不存在则回退 MINIMAX_API_KEY 环境变量。
+func TestAnswerGrounding_RealLLM_Discriminates(t *testing.T) {
+	if os.Getenv("AG_SMOKE") != "1" {
+		t.Skip("AG_SMOKE!=1：跳过真 LLM 冒烟")
+	}
+	client, err := llm.ResolveStrict(os.Getenv("AG_CONFIG")) // 同 ab.go:32 解析路径
+	if err != nil {
+		t.Fatalf("构造真 judge 失败（检查 AG_CONFIG 指向 minimax 配置 或 设 MINIMAX_API_KEY）: %v", err)
+	}
+	e := NewAnswerGrounding(client)
+
+	// 结构化结果：server_id=1 avg_money=2000, server_id=2 avg_money=8000（无 ARPU 这列、无 12.5）
+	calls := []contract.ToolCall{{Name: "analyze", Response: contract.Response{
+		Status: contract.StatusOK,
+		Table: &contract.TableResult{
+			Columns:  []contract.ColumnMeta{{Name: "server_id"}, {Name: "avg_money"}},
+			Rows:     [][]any{{1, 2000.0}, {2, 8000.0}},
+			RowCount: 2,
+		},
+	}}}
+	rubric := "逐个检查回答里的定量主张（数字/阈值/比较/比例）是否接地：逐字出现在某 qN 结果、或可由结果单元格合法派生（比例/倍数/差值/百分比）、或取整四舍五入后一致、或来自问题本身给定的阈值，均判 grounded；结果中找不到也无法派生判 ungrounded。score=5 全部接地；每出现一个未接地主张显著扣分，核心结论编造扣更重；score=1 多数定量主张悬空。"
+	spec := agSpecNode(t, rubric, 4)
+
+	// 正样本：派生量 8000/2000=4 倍合法 → 高分、无 ungrounded
+	pos := TaskResult{Answer: "1 服人均 2000，2 服人均 8000，2 服人均高出 4 倍。", ToolCalls: calls}
+	scPos, err := e.Evaluate(context.Background(), pos, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("正样本: %s | %s", scPos.Display, scPos.Detail)
+	if scPos.Value < 4.0/5.0 || strings.Contains(scPos.Detail, "未接地") {
+		t.Fatalf("正样本（合法派生 4 倍）应高分无未接地: %+v", scPos)
+	}
+
+	// 负样本：ARPU 12.5 凭空 → 跌破 min 且点名 12.5
+	neg := TaskResult{Answer: "1 服人均 2000，2 服人均 8000，ARPU 高达 12.5。", ToolCalls: calls}
+	scNeg, err := e.Evaluate(context.Background(), neg, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("负样本: %s | %s", scNeg.Display, scNeg.Detail)
+	if !scNeg.BelowMin || !strings.Contains(scNeg.Detail, "12.5") {
+		t.Fatalf("负样本（凭空 12.5）应 BelowMin 且 Detail 点名 12.5: %+v", scNeg)
 	}
 }
