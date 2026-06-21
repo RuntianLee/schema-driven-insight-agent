@@ -1,6 +1,9 @@
 package schema_protocol
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseAdvisorPlaybook(t *testing.T) {
 	withAdvisor := []byte(`
@@ -28,5 +31,13 @@ advisor:
 	}
 	if s2.Advisor != nil {
 		t.Errorf("无 advisor 块时 Advisor 应为 nil，实得 %+v", s2.Advisor)
+	}
+}
+
+func TestParseAdvisorBareKeyRejected(t *testing.T) {
+	// 裸 `advisor:`（YAML null）不得静默绕过——必须明确报错，与 etl_policy 对称。
+	bare := []byte("version: 1\ndomain: demo\nadvisor:\n")
+	if _, err := Parse(bare); err == nil || !strings.Contains(err.Error(), "advisor") {
+		t.Errorf("裸 advisor: 应拒绝且错误含 advisor, got %v", err)
 	}
 }
