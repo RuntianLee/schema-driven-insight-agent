@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/advisor"
@@ -98,6 +99,9 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 			out := contract.AnalystOutput{Question: task.Question, Results: capture.AnalystResults(), Narrative: answer}
 			if draft, derr := advisor.New(advLLM, prompts.AdvisorV0).Advise(ctx, out, cfg.AdvisorPlaybook); derr == nil {
 				res.Advisory = &draft
+			} else {
+				// 记录但不中断：Advisory 留 nil → advisor_grounding gate 失败会暴露问题，但需要可诊断的原因。
+				fmt.Fprintf(os.Stderr, "[eval] task %q: Advisor.Advise 失败: %v\n", task.ID, derr)
 			}
 		}
 
