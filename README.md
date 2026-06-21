@@ -16,7 +16,8 @@ Most "chat with your data" tools either (a) let an LLM write raw SQL against pro
 - **Three-layer data flow** — the agent only ever reads a local, de-identified SQLite snapshot. It **never** connects to production Postgres.
 - **Structured tool, not free-form SQL** — the agent calls a parameterized `query_distribution` tool with a column/bucket whitelist; SQL is built by the framework, not the LLM.
 - **Proactive insight** — beyond the distribution table, the agent surfaces operational takeaways (churn cliffs, whale concentration, server skew).
-- **Trajectory + Eval from day one** — every run is recorded; an eval harness gates `data_correctness` deterministically.
+- **Two-agent, traceable recommendations** — an optional Advisor agent consumes *only* the Analyst's structured output (never the raw data) plus an adapter-supplied operational playbook, and drafts recommendations each traceable to a specific analyst result; a deterministic grounding check drops any hallucinated reference.
+- **Trajectory + Eval from day one** — every run is recorded; an eval harness gates `data_correctness` **and `advisor_grounding`** deterministically.
 
 ## Quickstart (30 seconds, no API key, no database)
 
@@ -117,22 +118,24 @@ What the framework guarantees, and where the trust boundary sits:
 schema_protocol/   schema.yaml parser (etl_policy / index / TODO safety gate) + Digest + whitelisted SQL builder
 tools/             query_distribution tool (the agent's only data tool)
 eino_agent/        agent runner (LLM tool-calling loop)
+advisor/           Advisor agent: drafts traceable recommendations from the Analyst's structured output only (never raw data)
+trajcapture/       shared in-memory trajectory capture (Capture + Tee) for the Analyst→Advisor handoff (zero Runner change)
 agent/             agent contract (interfaces; engine-agnostic)
-contract/          response types (distribution rows, profile)
+contract/          response types (distribution rows, profile, advisory draft)
 etl/               generic ETL: schema-derived assembly (derive), orchestration (RunAll)
 etl/seedgen/       declarative synthetic data generator (seed.yaml → deterministic snapshot)
 etl/csvload/       CSV file → de-identified Layer-2 (mirrors seedgen; bring your own CSV)
 etl/introspect/    Postgres introspection + adapter-draft rendering (cmd/init core)
 etl_health/        startup readiness gate (min_rows / frozen / data_as_of)
 trajectory/        run recording (PII redacted on write)
-eval_harness/      eval engine: data_correctness + LLM-judge evaluators; evalcli shared assembly + inline YAML fixtures
+eval_harness/      eval engine: data_correctness + advisor_grounding (deterministic gates) + LLM-judge evaluators; evalcli shared assembly + inline YAML fixtures
 llm/               LLM client resolution (MiniMax; mock fallback)
-prompts/           methodology system prompt (no business data)
+prompts/           methodology system prompts (Analyst + Advisor; no business data)
 cmd/init/          scaffold a new adapter from a live Postgres (draft with TODO placeholders)
 cmd/etl/           generic ETL runner — everything derived from schema.yaml, no adapter code
 cmd/seed/          synthetic Layer-2 snapshot from a declarative seed.yaml (no database needed)
 cmd/csv/           Layer-2 snapshot from a CSV file (zero Go; treats CSV as Layer-1, de-identifies)
-cmd/agent/         the CLI entry point (REPL + single-shot)
+cmd/agent/         the CLI entry point (REPL + single-shot; -advise runs the Analyst→Advisor pipeline)
 cmd/eval/          eval suite runner (deterministic CI gate; exit 1 on gate failure; -mode ab for off-gate reflection A/B)
 cmd/eval-trend/    render cross-version trend HTML from eval-history.jsonl (zero deps, inline SVG)
 examples/toygame/  runnable synthetic example adapter — YAML only, zero Go
