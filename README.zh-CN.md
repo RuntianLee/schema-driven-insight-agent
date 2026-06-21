@@ -16,7 +16,8 @@
 - **三层数据流** —— Agent 只读取本地、已脱敏的 SQLite 快照，**绝不**连接生产 Postgres。
 - **结构化工具，而非自由 SQL** —— Agent 调用参数化的 `query_distribution` 工具（列/桶白名单），SQL 由框架构造，LLM 不写 SQL。
 - **主动洞察** —— 不止给分布表格，还主动指出运营要点（流失断崖、巨鲸集中度、分服倾斜）。
-- **Trajectory + Eval 从第一天就在** —— 每次运行都被记录；Eval 评测道以 `data_correctness` 确定性把关。
+- **双 agent、可溯源建议** —— 可选的 Advisor agent**只**消费 Analyst 的结构化输出（永不碰原始数据）+ adapter 提供的运营 playbook，产出建议草案，每条都可溯源到具体的 analyst 结果；确定性 grounding 校验丢弃任何幻觉引用。
+- **Trajectory + Eval 从第一天就在** —— 每次运行都被记录；Eval 评测道以 `data_correctness` **与 `advisor_grounding`** 确定性把关。
 
 ## 快速开始（30 秒，无需 API key、无需数据库）
 
@@ -106,22 +107,24 @@ flowchart TB
 schema_protocol/   schema.yaml 解析器（etl_policy / index / TODO 安全闸）+ Digest + 白名单 SQL 构造器
 tools/             query_distribution 工具（Agent 唯一的数据工具）
 eino_agent/        Agent runner（LLM tool-calling 循环）
+advisor/           Advisor agent：仅从 Analyst 结构化输出（永不碰原始数据）产出可溯源建议草案
+trajcapture/       共享内存轨迹捕获（Capture + Tee），承接 Analyst→Advisor 接力（Runner 零改）
 agent/             Agent 契约（接口；与引擎无关）
-contract/          响应类型（分布行、profile）
+contract/          响应类型（分布行、profile、建议草案）
 etl/               通用 ETL：schema 推导装配（derive）+ 编排（RunAll）
 etl/seedgen/       声明式合成数据生成器（seed.yaml → 确定性快照）
 etl/csvload/       CSV 文件 → 脱敏 Layer-2（镜像 seedgen；自带 CSV 即可用）
 etl/introspect/    Postgres 内省 + 接入草稿渲染（cmd/init 核心）
 etl_health/        启动就绪门控（min_rows / frozen / data_as_of）
 trajectory/        运行记录（写入侧 PII 脱敏）
-eval_harness/      评测引擎：data_correctness + LLM-judge；evalcli 共享装配 + 任务内联 fixture
+eval_harness/      评测引擎：data_correctness + advisor_grounding（确定性 gate）+ LLM-judge；evalcli 共享装配 + 任务内联 fixture
 llm/               LLM 客户端解析（MiniMax；mock 回退）
-prompts/           方法论 system prompt（不含业务数据）
+prompts/           方法论 system prompt（Analyst + Advisor；不含业务数据）
 cmd/init/          从真 Postgres 内省生成 adapter 草稿（TODO 占位）
 cmd/etl/           通用 ETL runner——装配全部由 schema.yaml 推导，零 adapter 代码
 cmd/seed/          按声明式 seed.yaml 生成合成 Layer-2 快照（无需数据库）
 cmd/csv/           从 CSV 文件生成 Layer-2 快照（零 Go；将 CSV 视为 Layer-1 并脱敏）
-cmd/agent/         CLI 入口（REPL + 单发）
+cmd/agent/         CLI 入口（REPL + 单发；-advise 跑 Analyst→Advisor 接力流水线）
 cmd/eval/          eval 任务集运行器（确定性 CI gate；gate 失败退出码 1；-mode ab 为 off-gate reflection A/B 度量）
 cmd/eval-trend/    从 eval-history.jsonl 渲染跨版本趋势 HTML（零依赖，内联 SVG）
 examples/toygame/  可跑的合成示例 adapter——纯 YAML、零 Go

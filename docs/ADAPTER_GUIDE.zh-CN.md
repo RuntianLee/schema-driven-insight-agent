@@ -19,7 +19,7 @@
 `cmd/init` **只读**内省你的生产 PG，按你点名的表生成一份接入包草稿：
 
 ```bash
-go run github.com/RuntianLee/schema-driven-insight-agent/cmd/init@v0.2.0 \
+go run github.com/RuntianLee/schema-driven-insight-agent/cmd/init@v0.7.0 \
   -db-config ./config/db.yaml \
   -tables player_basics \
   -domain my_game \
@@ -101,6 +101,19 @@ glossary:
 
 **PII 红线**：标了 `pii` 的字段在物化时被自动剔除——你**不可能**意外泄漏它。PII 在三个面用同一条规则把守：查询构造时拒绝、绝不物化进 Layer 2、绝不出现在喂给 LLM 的 schema Digest。解析器同时校验 bucket 单调性与列/role 白名单，并拒绝 PII 列标 `index`。
 
+### 可选 —— Advisor 运营 playbook
+
+要用双 agent 接力（`cmd/agent -advise`，以及下文的 `advisor_grounding` eval gate），可在 schema **顶层**加一个可选的 `advisor.playbook` 块——一段自由文本运营指引，框架**不透明透传**给 Advisor agent（绝不解读其业务含义）：
+
+```yaml
+advisor:
+  playbook: |
+    高流失细分（如某地域/年龄段流失率显著高于均值）：优先排查该细分的产品体验与获客质量，评估定向挽留。
+    一切建议为草案，需业务方验证后再行动。
+```
+
+Advisor **只**消费 Analyst 的结构化输出 + 这段 playbook——永不碰原始数据（多 agent 边界在编译期强制），产出建议草案，每条都可经 `source_ref` 溯源到具体 analyst 结果。不用 Advisor 就整块省略；裸 `advisor:` 键（无 `playbook`）会被拒绝（与 `etl_policy` 同样的三态规则）。
+
 ## 第 3 步 —— 跑起来（零 Go）
 
 物化 Layer-2 快照（二选一），再跑 agent，可选跑 eval。两条 runner 都从 schema 推导一切，**无需任何 adapter 代码**。
@@ -108,7 +121,7 @@ glossary:
 ### 物化 —— 真 Postgres（`cmd/etl`，只读）
 
 ```bash
-go run github.com/RuntianLee/schema-driven-insight-agent/cmd/etl@v0.2.0 \
+go run github.com/RuntianLee/schema-driven-insight-agent/cmd/etl@v0.7.0 \
   -schema ./my-adapter/schema.yaml -db-config ./config/db.yaml
 ```
 
@@ -117,7 +130,7 @@ go run github.com/RuntianLee/schema-driven-insight-agent/cmd/etl@v0.2.0 \
 ### 物化 —— 合成数据（`cmd/seed`，无需任何数据库）
 
 ```bash
-go run github.com/RuntianLee/schema-driven-insight-agent/cmd/seed@v0.2.0 \
+go run github.com/RuntianLee/schema-driven-insight-agent/cmd/seed@v0.7.0 \
   -schema ./my-adapter/schema.yaml -spec ./my-adapter/seed.yaml
 ```
 
@@ -152,6 +165,17 @@ go run ./cmd/agent -q "金币余额分布是怎样的？"
 ```
 
 Agent 流程：校验就绪 → 把你的 schema 解析成 Digest → 把 `query_distribution` 工具调用经白名单 SQL 构造器路由 → 用主动洞察叙述分布。
+
+#### 双 agent 模式（`-advise`）
+
+加 `-advise` 跑 Analyst → Advisor 接力：Analyst 先跑一遍，结构化结果交给 Advisor（用你的 `advisor.playbook`），建议草案在答案之后渲染。需要真 LLM（`config/llm.yaml`）；mock 回退下 Advisor 没有可依据的素材。
+
+```bash
+SCHEMA_PATH=./my-adapter/schema.yaml \
+SQLITE_PATH=./my-adapter/data/my.db \
+ETL_HEALTH_PATH=./my-adapter/data/etl_health.json \
+go run ./cmd/agent -advise -q "哪些细分流失最严重？该如何应对？"
+```
 
 ### 跑 Eval（`cmd/eval`，可选门控）
 
@@ -196,6 +220,27 @@ evaluators:
 数据源解析优先级：**任务内联 `fixture:` > Go 调用方注入的 `FixtureFunc` > `-db` 共享库**。`data_correctness` 把真实工具输出逐字段对比钉死值（确定性让它精确可断言），它决定 `cmd/eval` 的退出码（gate 失败 → 退出 1，可直接接入 CI）。LLM-judge 评测器（`reasoning_quality`/`insight_novelty`）给叙述质量打分，运行在报告模式。
 
 mock 道（默认）无需 LLM key：agent 回放 `llm_turns`、judge 用 mock，`data_correctness` 完全确定性。真 LLM 道传 `-llm minimax -config config/llm.yaml`。
+
+### Advisor grounding 门（双 agent 任务）
+
+若你的 `schema.yaml` 声明了 `advisor.playbook`，任务可通过列出 **`advisor_grounding`** 评测器来加入 Analyst→Advisor 接力——它是第二道**确定性 gate**（与 `data_correctness` 并列），校验每条建议草案的 `source_ref` 都能溯源到真实 analyst 结果，且产出条数 ≥ `min_items`。mock 道下任务用顶层 **`advisor_turn`** 字段提供 Advisor 的脚本草案；真 LLM 道用配置模型驱动 Advisor（`advisor_turn` 被忽略）。
+
+```yaml
+id: advisor_retention
+question: "不同国家的客户流失率有何差异？应如何应对？"
+llm_turns:
+  - '{"tool":"query_distribution","args":{"table":"customers","column":"Exited","group_by":["Geography"]}}'
+  - "德国流失约 32%，显著高于法国/西班牙（约 16%）。"
+advisor_turn: |
+  {"summary":"分市场挽留建议（草案）","items":[
+    {"observation":"德国流失率约 32%，显著高于其他市场","source_ref":"q1","action":"优先排查德国市场产品体验与获客质量，评估定向挽留","priority":"high","caveat":"草案，需业务方验证"}
+  ]}
+evaluators:
+  advisor_grounding: {min_items: 1}            # 确定性 —— 同样是 CI gate
+  reasoning_quality: {rubric: "...", min_score: 3}
+```
+
+`source_ref` 取值为 `q1, q2, …`（Analyst 工具调用的 1-based 序号）。两个跨域 benchmark 见 `examples/bankchurn/eval/tasks/advisor_retention.yaml` 与 `examples/toygame/eval/tasks/advisor_churn.yaml`。
 
 ## seed.yaml 生成器参考
 
@@ -248,5 +293,6 @@ tables:
 - [ ] `cmd/etl`（真库）或 `cmd/seed`（合成）跑出 Layer-2 SQLite **+ `etl_health.json`**。
 - [ ] 用 `SCHEMA_PATH`/`SQLITE_PATH`/`ETL_HEALTH_PATH` 三个 env 指向你的 adapter，跑 `cmd/agent`。
 - [ ] （可选）eval 任务（内联 `fixture:` 或 `-db` 共享库），做 `data_correctness` 门。
+- [ ] （可选，双 agent）`schema.yaml` 加 `advisor.playbook` + 任务用 `advisor_grounding` 门（mock 道再加 `advisor_turn`）。
 
 这就是全部契约。零 Go。

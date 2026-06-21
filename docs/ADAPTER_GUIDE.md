@@ -19,7 +19,7 @@ Three steps:
 `cmd/init` **read-only** introspects your production PG and generates an onboarding package draft for the tables you name:
 
 ```bash
-go run github.com/RuntianLee/schema-driven-insight-agent/cmd/init@v0.2.0 \
+go run github.com/RuntianLee/schema-driven-insight-agent/cmd/init@v0.7.0 \
   -db-config ./config/db.yaml \
   -tables player_basics \
   -domain my_game \
@@ -101,6 +101,20 @@ Key field attributes:
 
 **PII red line**: fields marked `pii` are automatically stripped at materialization — you **cannot** leak them by accident. PII is guarded on three faces with one rule: rejected at query build time, never materialized into Layer 2, never present in the schema Digest fed to the LLM. The parser also validates bucket monotonicity and the column/role whitelist, and rejects PII columns marked `index`.
 
+### Optional — Advisor operational playbook
+
+To use the two-agent pipeline (`cmd/agent -advise`, and the `advisor_grounding` eval gate below), add an optional **top-level** `advisor.playbook` block — free-text operational guidance the framework passes **opaquely** to the Advisor agent (it is never parsed for business meaning):
+
+```yaml
+advisor:
+  playbook: |
+    High-churn segment (e.g. a region/age band well above the mean): investigate that
+    segment's product experience and acquisition quality first; assess targeted retention.
+    All recommendations are drafts — validate with the business before acting.
+```
+
+The Advisor consumes **only** the Analyst's structured output plus this playbook — never the raw data (a multi-agent boundary enforced at compile time) — and emits draft recommendations, each `source_ref`-traceable to a specific analyst result. Omit the block entirely if you don't use the Advisor; a bare `advisor:` key with no `playbook` is rejected (same three-state rule as `etl_policy`).
+
 ## Step 3 — Run it (zero Go)
 
 Materialize a Layer-2 snapshot (pick one), then run the agent, optionally run eval. Both runners derive everything from the schema — **no adapter code required**.
@@ -108,7 +122,7 @@ Materialize a Layer-2 snapshot (pick one), then run the agent, optionally run ev
 ### Materialize — real Postgres (`cmd/etl`, read-only)
 
 ```bash
-go run github.com/RuntianLee/schema-driven-insight-agent/cmd/etl@v0.2.0 \
+go run github.com/RuntianLee/schema-driven-insight-agent/cmd/etl@v0.7.0 \
   -schema ./my-adapter/schema.yaml -db-config ./config/db.yaml
 ```
 
@@ -117,7 +131,7 @@ go run github.com/RuntianLee/schema-driven-insight-agent/cmd/etl@v0.2.0 \
 ### Materialize — synthetic data (`cmd/seed`, no database needed)
 
 ```bash
-go run github.com/RuntianLee/schema-driven-insight-agent/cmd/seed@v0.2.0 \
+go run github.com/RuntianLee/schema-driven-insight-agent/cmd/seed@v0.7.0 \
   -schema ./my-adapter/schema.yaml -spec ./my-adapter/seed.yaml
 ```
 
@@ -152,6 +166,17 @@ go run ./cmd/agent -q "What's the coin-balance distribution?"
 ```
 
 Agent flow: verify readiness → parse your schema into a Digest → route the `query_distribution` tool call through the whitelisted SQL builder → narrate the distribution with proactive insight.
+
+#### Two-agent mode (`-advise`)
+
+Add `-advise` to run the Analyst → Advisor pipeline: the Analyst runs once, its structured results are handed to the Advisor (using your `advisor.playbook`), and the draft recommendations are rendered after the answer. Needs a real LLM (`config/llm.yaml`); with the mock fallback the Advisor has nothing to draft from.
+
+```bash
+SCHEMA_PATH=./my-adapter/schema.yaml \
+SQLITE_PATH=./my-adapter/data/my.db \
+ETL_HEALTH_PATH=./my-adapter/data/etl_health.json \
+go run ./cmd/agent -advise -q "Which segments churn most, and what should we do?"
+```
 
 ### Run eval (`cmd/eval`, optional gate)
 
@@ -196,6 +221,27 @@ evaluators:
 Data-source resolution priority: **inline `fixture:` > Go-injected `FixtureFunc` > `-db` shared DB**. `data_correctness` compares the real tool output field-by-field against pinned values (determinism makes it exactly assertable), and it decides `cmd/eval`'s exit code (gate fail → exit 1, drop-in for CI). The LLM-judge evaluators (`reasoning_quality`/`insight_novelty`) score narrative quality in report mode.
 
 The mock lane (default) needs no LLM key: the agent replays `llm_turns`, the judge uses a mock, and `data_correctness` is fully deterministic. For the real-LLM lane pass `-llm minimax -config config/llm.yaml`.
+
+### Advisor grounding gate (two-agent tasks)
+
+If your `schema.yaml` declares an `advisor.playbook`, a task can opt into the Analyst→Advisor relay by listing the **`advisor_grounding`** evaluator — a second **deterministic gate** (alongside `data_correctness`) that checks every drafted recommendation's `source_ref` traces back to a real analyst result, and that at least `min_items` recommendations were produced. In the mock lane the task supplies the Advisor's scripted draft via a top-level **`advisor_turn`** field; the real-LLM lane drives the Advisor with the configured model (and `advisor_turn` is ignored).
+
+```yaml
+id: advisor_retention
+question: "Which markets churn most, and how should we respond?"
+llm_turns:
+  - '{"tool":"query_distribution","args":{"table":"customers","column":"Exited","group_by":["Geography"]}}'
+  - "Germany churns ~32%, well above France/Spain (~16%)."
+advisor_turn: |
+  {"summary":"Per-market retention (draft)","items":[
+    {"observation":"Germany churn ~32%, well above other markets","source_ref":"q1","action":"Investigate German product experience and acquisition quality; assess targeted retention","priority":"high","caveat":"Draft — validate with the business"}
+  ]}
+evaluators:
+  advisor_grounding: {min_items: 1}            # deterministic — also a CI gate
+  reasoning_quality: {rubric: "...", min_score: 3}
+```
+
+`source_ref` values are `q1, q2, …` (the 1-based index of the Analyst's tool calls). See `examples/bankchurn/eval/tasks/advisor_retention.yaml` and `examples/toygame/eval/tasks/advisor_churn.yaml` for the two bundled cross-domain benchmarks.
 
 ## seed.yaml generator reference
 
@@ -248,5 +294,6 @@ The `etl_policy` block (required by `cmd/etl`/`cmd/seed`) has six semantics:
 - [ ] `cmd/etl` (real DB) or `cmd/seed` (synthetic) produces a Layer-2 SQLite **+ `etl_health.json`**.
 - [ ] Run `cmd/agent` with the three envs `SCHEMA_PATH`/`SQLITE_PATH`/`ETL_HEALTH_PATH` pointed at your adapter.
 - [ ] (Optional) eval tasks (inline `fixture:` or `-db` shared DB) for a `data_correctness` gate.
+- [ ] (Optional, two-agent) `advisor.playbook` in `schema.yaml` + tasks with the `advisor_grounding` gate (and `advisor_turn` for the mock lane).
 
 That's the whole contract. Zero Go.
