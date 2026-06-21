@@ -15,13 +15,14 @@ import (
 // Task 是单个 benchmark 任务。Evaluators 的 value 留作 yaml.Node，
 // 由各 evaluator 自行 Decode（spec §3.3）。
 type Task struct {
-	ID         string               `yaml:"id"`
-	Title      string               `yaml:"title"`
-	Question   string               `yaml:"question"`
-	Facets     []string             `yaml:"facets"` // 可选：override 自动派生（结构测不出的哨兵等）
-	LLMTurns   []string             `yaml:"llm_turns"`
-	Evaluators map[string]yaml.Node `yaml:"evaluators"`
-	Fixture    yaml.Node            `yaml:"fixture"` // 可选内联 fixture（evalcli 解码；零值=未声明）
+	ID          string               `yaml:"id"`
+	Title       string               `yaml:"title"`
+	Question    string               `yaml:"question"`
+	Facets      []string             `yaml:"facets"` // 可选：override 自动派生（结构测不出的哨兵等）
+	LLMTurns    []string             `yaml:"llm_turns"`
+	AdvisorTurn string               `yaml:"advisor_turn"` // 可选：mock 道下 Advisor 的脚本输出
+	Evaluators  map[string]yaml.Node `yaml:"evaluators"`
+	Fixture     yaml.Node            `yaml:"fixture"` // 可选内联 fixture（evalcli 解码；零值=未声明）
 }
 
 // LoadDir 读 dir 下所有 *.yaml，按文件名排序解析（确定性），校验 id 非空。

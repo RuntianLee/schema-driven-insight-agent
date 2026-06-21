@@ -148,7 +148,7 @@ func TestPersistentProviderObservePersistsDistilledRefineLesson(t *testing.T) {
 		TaskID:   "t1",
 		Question: "如何分析留存",
 		Answer:   "原回答提到 server_id=3 和 42.7%",
-		ToolCalls: []evaluators.ToolCall{{
+		ToolCalls: []contract.ToolCall{{
 			Name: "analyze",
 			Args: map[string]any{"filters": []any{"server_id=3"}},
 			Response: contract.Response{
@@ -415,7 +415,7 @@ func TestWritePathTagsAnalyzeFacets(t *testing.T) {
 	res := evaluators.TaskResult{
 		TaskID:   "arpu",
 		Question: "各服人均货币",
-		ToolCalls: []evaluators.ToolCall{{
+		ToolCalls: []contract.ToolCall{{
 			Name: "analyze",
 			Args: map[string]any{
 				"table":      "player_basics",

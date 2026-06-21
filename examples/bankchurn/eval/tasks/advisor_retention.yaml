@@ -1,0 +1,17 @@
+# Analyst→Advisor 接力：各国流失对比 → 分市场挽留建议草案。
+id: advisor_retention
+title: "Advisor — 分市场挽留建议草案"
+question: "不同国家的客户流失率有何差异？应如何应对？"
+llm_turns:
+  - '{"tool":"query_distribution","args":{"table":"customers","column":"Exited","group_by":["Geography"]}}'
+  - "德国流失约 32%，显著高于法国/西班牙（约 16%）。"
+advisor_turn: |
+  {"summary":"分市场挽留建议（草案）","items":[
+    {"observation":"德国流失率约 32%，显著高于其他市场","source_ref":"q1","action":"优先排查德国市场产品体验与获客质量，评估定向挽留活动","priority":"high","caveat":"草案，需业务方结合成本与监管验证"}
+  ]}
+evaluators:
+  advisor_grounding:
+    min_items: 1
+  reasoning_quality:
+    rubric: "是否对比各国流失差异并量化？"
+    min_score: 3

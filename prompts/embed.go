@@ -5,3 +5,6 @@ import _ "embed"
 
 //go:embed system_v0.md
 var SystemV0 string
+
+//go:embed advisor_v0.md
+var AdvisorV0 string

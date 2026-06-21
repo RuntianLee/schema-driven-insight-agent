@@ -20,7 +20,7 @@ func specNode(t *testing.T, y string) *yaml.Node {
 }
 
 func resultWith(resp contract.Response) TaskResult {
-	return TaskResult{TaskID: "t", ToolCalls: []ToolCall{{Name: "query_distribution", Response: resp}}}
+	return TaskResult{TaskID: "t", ToolCalls: []contract.ToolCall{{Name: "query_distribution", Response: resp}}}
 }
 
 func TestDataCorrectness_RowsAndProfilePass(t *testing.T) {
@@ -104,7 +104,7 @@ func TestDataCorrectness_MissingToolFails(t *testing.T) {
 }
 
 func TestDataCorrectness_TableMatcher(t *testing.T) {
-	res := TaskResult{ToolCalls: []ToolCall{{
+	res := TaskResult{ToolCalls: []contract.ToolCall{{
 		Name: "analyze",
 		Response: contract.Response{
 			Status: contract.StatusOK,
@@ -138,7 +138,7 @@ table:
 }
 
 func TestDataCorrectness_TableMatcherFails(t *testing.T) {
-	res := TaskResult{ToolCalls: []ToolCall{{
+	res := TaskResult{ToolCalls: []contract.ToolCall{{
 		Name: "analyze",
 		Response: contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
 			Columns: []contract.ColumnMeta{{Name: "server_id"}, {Name: "players"}},
@@ -155,7 +155,7 @@ func TestDataCorrectness_TableMatcherFails(t *testing.T) {
 }
 
 func TestDataCorrectness_TableMatcherRejectsEmptyMatch(t *testing.T) {
-	res := TaskResult{ToolCalls: []ToolCall{{
+	res := TaskResult{ToolCalls: []contract.ToolCall{{
 		Name: "analyze",
 		Response: contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
 			Columns: []contract.ColumnMeta{{Name: "server_id"}, {Name: "players"}},
@@ -260,7 +260,7 @@ func TestDataCorrectness_TableExpectAnyAllowsCoreMetricColumnReorder(t *testing.
 }
 
 func TestDataCorrectness_TableSpecPassesWhenAnySuccessfulToolResponseMatches(t *testing.T) {
-	res := TaskResult{ToolCalls: []ToolCall{
+	res := TaskResult{ToolCalls: []contract.ToolCall{
 		{
 			Name: "analyze",
 			Response: contract.Response{

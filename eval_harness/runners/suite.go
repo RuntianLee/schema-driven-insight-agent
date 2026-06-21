@@ -1,18 +1,23 @@
 // framework/eval_harness/runners/suite.go
-// Package runners 提供 eval harness 的编排层：sequencedMock + captureStore + RunSuite。
+// Package runners 提供 eval harness 的编排层：sequencedMock + trajcapture + RunSuite。
 package runners
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"time"
 
+	"github.com/RuntianLee/schema-driven-insight-agent/advisor"
 	"github.com/RuntianLee/schema-driven-insight-agent/agent"
+	"github.com/RuntianLee/schema-driven-insight-agent/contract"
 	"github.com/RuntianLee/schema-driven-insight-agent/eino_agent"
 	evalpkg "github.com/RuntianLee/schema-driven-insight-agent/eval_harness"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
+	"github.com/RuntianLee/schema-driven-insight-agent/prompts"
+	"github.com/RuntianLee/schema-driven-insight-agent/trajcapture"
 	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
@@ -21,11 +26,12 @@ import (
 // TaskInput 是 RunSuite 的任务输入（与 tasks.Task 同形，解耦 import 方向）。
 // 导出：cmd 跨包构造（Task 12）。
 type TaskInput struct {
-	ID         string
-	Title      string
-	Question   string
-	LLMTurns   []string
-	Evaluators map[string]yaml.Node
+	ID          string
+	Title       string
+	Question    string
+	LLMTurns    []string
+	Evaluators  map[string]yaml.Node
+	AdvisorTurn string // 可选：mock 道下 Advisor 的脚本输出（真 LLM 道忽略）
 }
 
 // Config 装配 RunSuite 的全部依赖（adapter-agnostic）。
@@ -44,6 +50,9 @@ type Config struct {
 	ReflectionProvider ReflectionProvider
 	// TaskClass 写入 trajectory.task_class；空串沿用 benchmark，保持既有 suite 语义。
 	TaskClass string
+	// AdvisorPlaybook 非空时，对选用 advisor_grounding 的任务跑 Analyst→Advisor 接力，
+	// 草案写入 TaskResult.Advisory；mock 道用 task.AdvisorTurn 作 Advisor 脚本。
+	AdvisorPlaybook string
 }
 
 // RunSuite 逐任务跑 agent（mock LLM）+ 真 tool，收集 TaskResult，跑 evaluator，汇总 Report。
@@ -54,12 +63,12 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		if agentClient == nil {
 			agentClient = newSequencedMock(task.LLMTurns)
 		}
-		capture := newCaptureStore()
+		capture := trajcapture.New()
 		var store agent.TrajectoryStore = capture
 		var trajID string
 		if cfg.TrajDB != nil {
 			if rec, err := trajectory.New(ctx, cfg.TrajDB, eino_agent.AgentVersion, task.Question, taskClass(cfg)); err == nil {
-				tee := newTeeStore(capture, rec)
+				tee := trajcapture.NewTee(capture, rec)
 				store = tee
 				trajID = tee.TrajectoryID()
 			}
@@ -76,9 +85,24 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 			TaskID:    task.ID,
 			Question:  task.Question,
 			Answer:    answer,
-			Outcome:   capture.outcome,
-			ToolCalls: capture.toolCalls,
+			Outcome:   capture.Outcome(),
+			ToolCalls: capture.ToolCalls(),
 			RunErr:    runErr,
+		}
+
+		// Advisor 同跑接力：任务选用 advisor_grounding 时，把捕获的结构化结果交 Advisor 产草案。
+		if _, wantsAdvisor := task.Evaluators["advisor_grounding"]; wantsAdvisor && cfg.AdvisorPlaybook != "" {
+			var advLLM llm.Client = cfg.AgentLLM
+			if advLLM == nil {
+				advLLM = newSequencedMock([]string{task.AdvisorTurn})
+			}
+			out := contract.AnalystOutput{Question: task.Question, Results: capture.AnalystResults(), Narrative: answer}
+			if draft, derr := advisor.New(advLLM, prompts.AdvisorV0).Advise(ctx, out, cfg.AdvisorPlaybook); derr == nil {
+				res.Advisory = &draft
+			} else {
+				// 记录但不中断：Advisory 留 nil → advisor_grounding gate 失败会暴露问题，但需要可诊断的原因。
+				fmt.Fprintf(os.Stderr, "[eval] task %q: Advisor.Advise 失败: %v\n", task.ID, derr)
+			}
 		}
 
 		scores := make(map[string]evaluators.Score, len(cfg.EvalOrder))

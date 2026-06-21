@@ -237,9 +237,9 @@ func TestProfile_RowsAttachThreshold(t *testing.T) {
 func TestProfile_BalanceTotal(t *testing.T) {
 	s := fixtureSchema(t)
 	db := fixtureDB(t, func(insert func(string, int64, int)) {
-		insert("coins", 5000, 200)   // 100 万
-		insert("coins", 50000, 150)  // 750 万
-		insert("coins", 600000, 50)  // 3000 万
+		insert("coins", 5000, 200)  // 100 万
+		insert("coins", 50000, 150) // 750 万
+		insert("coins", 600000, 50) // 3000 万
 	})
 	resp := NewDistributionTool(s, db).Run(context.Background(), QueryDistributionInput{
 		Table: "player_currencies", Column: "balance",

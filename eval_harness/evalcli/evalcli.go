@@ -28,8 +28,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// evalOrder 是报告列顺序，也是 gate 范围口径（仅 data_correctness 决定退出码）。
-var evalOrder = []string{"data_correctness", "reasoning_quality", "insight_novelty"}
+// evalOrder 是报告列顺序，也是 gate 范围口径（data_correctness + advisor_grounding 决定退出码）。
+var evalOrder = []string{"data_correctness", "advisor_grounding", "reasoning_quality", "insight_novelty"}
 
 // FixtureFunc 为单个任务 seed 独立 fixture：dir 是本任务的临时目录，返回已就绪的
 // Layer2 SQLite 连接（evalcli 负责 Close 与目录清理）。
@@ -140,6 +140,7 @@ func runPass(
 
 		evalReg := evaluators.NewRegistry()
 		evalReg.Register(evaluators.NewDataCorrectness())
+		evalReg.Register(evaluators.NewAdvisorGrounding())
 		evalReg.Register(evaluators.NewReasoningQuality(judge))
 		evalReg.Register(evaluators.NewInsightNovelty(judge))
 
@@ -153,6 +154,7 @@ func runPass(
 			AgentLLM:           agentLLM,
 			ReflectionProvider: provider,
 			TaskClass:          opts.TaskClass,
+			AdvisorPlaybook:    advisorPlaybook(schema),
 		})
 		cleanup()
 		if err != nil {
@@ -240,11 +242,12 @@ func toTaskInput(t tasks.Task) runners.TaskInput {
 		evals[k] = v
 	}
 	return runners.TaskInput{
-		ID:         t.ID,
-		Title:      t.Title,
-		Question:   t.Question,
-		LLMTurns:   t.LLMTurns,
-		Evaluators: evals,
+		ID:          t.ID,
+		Title:       t.Title,
+		Question:    t.Question,
+		LLMTurns:    t.LLMTurns,
+		AdvisorTurn: t.AdvisorTurn,
+		Evaluators:  evals,
 	}
 }
 
@@ -252,7 +255,7 @@ func mergeInto(dst, src *evalpkg.Report) {
 	for _, tid := range src.Tasks {
 		for _, name := range evalOrder {
 			if s, ok := src.Scores[tid][name]; ok {
-				dst.Add(tid, s, name == "data_correctness")
+				dst.Add(tid, s, name == "data_correctness" || name == "advisor_grounding")
 			}
 		}
 	}
@@ -276,6 +279,14 @@ func facetsForTask(task tasks.Task) []string {
 		}
 	}
 	return nil
+}
+
+// advisorPlaybook 取 schema 的 Advisor playbook（无则空串）。
+func advisorPlaybook(s *schema_protocol.Schema) string {
+	if s != nil && s.Advisor != nil {
+		return s.Advisor.Playbook
+	}
+	return ""
 }
 
 func writeReports(rep *evalpkg.Report, dir string) error {

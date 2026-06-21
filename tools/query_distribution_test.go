@@ -50,9 +50,9 @@ var wedgeInput = QueryDistributionInput{
 func TestQueryDistribution_OK(t *testing.T) {
 	s := fixtureSchema(t)
 	db := fixtureDB(t, func(insert func(string, int64, int)) {
-		insert("coins", 5000, 200)   // 0~1w
-		insert("coins", 50000, 150)  // 1~10w
-		insert("coins", 600000, 50)  // 50w+
+		insert("coins", 5000, 200)  // 0~1w
+		insert("coins", 50000, 150) // 1~10w
+		insert("coins", 600000, 50) // 50w+
 	})
 	resp := NewDistributionTool(s, db).Run(context.Background(), wedgeInput)
 	if resp.Status != contract.StatusOK {

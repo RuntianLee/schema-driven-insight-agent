@@ -30,6 +30,19 @@ func TestSystemPromptDocumentsCountWithoutPIIColumn(t *testing.T) {
 	}
 }
 
+func TestAdvisorPromptNonEmptyAndNoBaselineNumbers(t *testing.T) {
+	// Guard: ensure advisor_v0.md is embedded and not accidentally emptied.
+	if strings.TrimSpace(AdvisorV0) == "" {
+		t.Fatal("AdvisorV0 must not be empty")
+	}
+	// design-v3 §4 #4：advisor prompt 同样不预投 baseline 数字（与 SystemV0 共用同一禁止列表）。
+	for _, forbidden := range []string{"21.56", "1.58", "63.41", "266871", "359079"} {
+		if strings.Contains(AdvisorV0, forbidden) {
+			t.Fatalf("advisor prompt must NOT contain baseline number %q", forbidden)
+		}
+	}
+}
+
 func TestSystemPromptDocumentsAnalyzeAggregateWhitelist(t *testing.T) {
 	for _, want := range []string{
 		"analyze 不支持",

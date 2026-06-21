@@ -23,6 +23,7 @@ type rawSchema struct {
 	Glossary      rawGlossary          `yaml:"glossary"`
 	Tuning        rawTuning            `yaml:"tuning"`
 	ETLPolicy     yaml.Node            `yaml:"etl_policy"` // 裸键(null) 与 {} 区分见 Parse
+	Advisor       yaml.Node            `yaml:"advisor"`    // 裸键(null) 与 {} 区分见 Parse
 }
 
 type rawETLPolicy struct {
@@ -141,6 +142,19 @@ func Parse(yamlBytes []byte) (*Schema, error) {
 			MinRows: raw.MinRows, HealthMinRows: raw.HealthMinRows,
 			Frozen: raw.Frozen, HealthPath: raw.HealthPath, DataAsOf: raw.DataAsOf,
 		}
+	}
+	// advisor 三态：未声明(IsZero)=无 playbook；裸键(null)=明确报错；否则解码。
+	if !r.Advisor.IsZero() {
+		if r.Advisor.Tag == "!!null" {
+			return nil, fmt.Errorf("advisor 为空块——要么删除该键，要么填写 playbook")
+		}
+		var raw struct {
+			Playbook string `yaml:"playbook"`
+		}
+		if err := r.Advisor.Decode(&raw); err != nil {
+			return nil, fmt.Errorf("advisor 解码失败: %w", err)
+		}
+		s.Advisor = &AdvisorPolicy{Playbook: raw.Playbook}
 	}
 	for k, v := range r.DataSources {
 		s.DataSources[k] = DataSource{Type: v.Type, DSNEnv: v.DSNEnv, Access: v.Access, Path: v.Path}

@@ -15,7 +15,7 @@ func TestDataCorrectness_SelfCorrectionTakesLastOK(t *testing.T) {
 		Status: contract.StatusOK,
 		Data:   []contract.BucketRow{{Bucket: "20", PlayerCount: 150}},
 	}
-	res := TaskResult{TaskID: "t", ToolCalls: []ToolCall{
+	res := TaskResult{TaskID: "t", ToolCalls: []contract.ToolCall{
 		{Name: "query_distribution", Response: bad},
 		{Name: "query_distribution", Response: good},
 	}}

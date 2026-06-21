@@ -1,0 +1,17 @@
+# Analyst→Advisor 接力：货币存量分布 → 高价值玩家运营建议草案。
+id: advisor_churn
+title: "Advisor — 高价值玩家运营建议草案"
+question: "玩家货币存量分布如何？该如何运营？"
+llm_turns:
+  - '{"tool":"query_distribution","args":{"table":"player_currencies","column":"balance","bucket_key":"coins_balance"}}'
+  - "头部少数玩家占据大部分货币存量，60% 玩家金币余额低于 100。"
+advisor_turn: |
+  {"summary":"高价值玩家运营建议（草案）","items":[
+    {"observation":"头部玩家货币存量高度集中，仅 2% 进入 1w+ 高净值段","source_ref":"q1","action":"对高存量玩家单独运营，建议专属活动 + 防流失监控","priority":"high","caveat":"草案，需运营结合体验验证"}
+  ]}
+evaluators:
+  advisor_grounding:
+    min_items: 1
+  reasoning_quality:
+    rubric: "是否识别头部玩家货币存量集中并量化？"
+    min_score: 3

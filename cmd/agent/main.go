@@ -19,13 +19,16 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/RuntianLee/schema-driven-insight-agent/advisor"
 	"github.com/RuntianLee/schema-driven-insight-agent/agent"
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
 	"github.com/RuntianLee/schema-driven-insight-agent/eino_agent"
 	"github.com/RuntianLee/schema-driven-insight-agent/etl_health"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
+	"github.com/RuntianLee/schema-driven-insight-agent/prompts"
 	"github.com/RuntianLee/schema-driven-insight-agent/schema_protocol"
 	"github.com/RuntianLee/schema-driven-insight-agent/tools"
+	"github.com/RuntianLee/schema-driven-insight-agent/trajcapture"
 	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
 
 	_ "modernc.org/sqlite"
@@ -35,6 +38,7 @@ import (
 
 func main() {
 	q := flag.String("q", "", "单发模式：提问后退出（留空则进入 REPL）")
+	advise := flag.Bool("advise", false, "同跑自动接力：Analyst 跑完自动调 Advisor 产出建议草案")
 	configPath := flag.String("config", "./config/llm.yaml", "LLM provider YAML config 文件路径")
 	flag.Parse()
 
@@ -108,14 +112,65 @@ func main() {
 	opener := func(ctx context.Context, agentVersion, question string) (agent.TrajectoryStore, error) {
 		return trajectory.New(ctx, trajDB, agentVersion, question, "production")
 	}
-	runner := eino_agent.New(client, registry, opener, schema.Digest())
+	digest := schema.Digest()
+	runner := eino_agent.New(client, registry, opener, digest)
 
 	// ── 选择模式 ──────────────────────────────────────────────────────────
+	if *advise && *q == "" {
+		log.Fatal("-advise 必须配合 -q 使用（REPL 暂不支持）")
+	}
 	if *q != "" {
-		runOnce(ctx, runner, *q)
+		if *advise {
+			playbook := ""
+			if schema.Advisor != nil {
+				playbook = schema.Advisor.Playbook
+			}
+			answer, draft, err := runAdvisePipeline(ctx, client, registry, digest, playbook, *q)
+			if err != nil {
+				log.Fatalf("advise pipeline error: %v", err)
+			}
+			fmt.Println(answer)
+			fmt.Print(renderAdvisory(draft))
+		} else {
+			runOnce(ctx, runner, *q)
+		}
 	} else {
 		runREPL(ctx, runner)
 	}
+}
+
+// runAdvisePipeline 同跑自动接力：Analyst 跑一遍（经 Capture 收结构化结果）→ 构 AnalystOutput → Advisor 出草案。
+func runAdvisePipeline(ctx context.Context, client llm.Client, registry agent.ToolDispatcher,
+	schemaDigest, playbook, question string) (string, contract.AdvisoryDraft, error) {
+	cap := trajcapture.New()
+	opener := func(_ context.Context, _, _ string) (agent.TrajectoryStore, error) { return cap, nil }
+	runner := eino_agent.New(client, registry, opener, schemaDigest)
+	answer, err := runner.Run(ctx, question)
+	if err != nil {
+		return "", contract.AdvisoryDraft{}, err
+	}
+	out := contract.AnalystOutput{Question: question, Results: cap.AnalystResults(), Narrative: answer}
+	draft, err := advisor.New(client, prompts.AdvisorV0).Advise(ctx, out, playbook)
+	if err != nil {
+		return answer, contract.AdvisoryDraft{}, err
+	}
+	return answer, draft, nil
+}
+
+// renderAdvisory 把草案渲染成人读文本（明确标注推测性）。
+func renderAdvisory(d contract.AdvisoryDraft) string {
+	var b strings.Builder
+	b.WriteString("\n── 建议草案（推测性，需业务方验证）──\n")
+	if d.Summary != "" {
+		b.WriteString(d.Summary + "\n")
+	}
+	for i, it := range d.Items {
+		fmt.Fprintf(&b, "%d. [%s] %s\n   依据(%s): %s\n   注: %s\n", i+1, it.Priority, it.Action, it.SourceRef, it.Observation, it.Caveat)
+	}
+	if len(d.Items) == 0 {
+		b.WriteString("（无可靠依据，未产出建议）\n")
+	}
+	return b.String()
 }
 
 // runOnce 单发模式：Run 一次后退出。
