@@ -75,7 +75,7 @@ func (r *Report) ConsoleTable() string {
 	if r.GateFailed() {
 		gate = "FAIL ✗"
 	}
-	b.WriteString("GATE (data_correctness): " + gate + "\n")
+	b.WriteString("GATE (deterministic: data_correctness + advisor_grounding): " + gate + "\n")
 	return b.String()
 }
 
@@ -95,7 +95,7 @@ func (r *Report) Markdown() string {
 	if r.GateFailed() {
 		gate = "FAIL"
 	}
-	fmt.Fprintf(&b, "\n**GATE (data_correctness): %s**\n", gate)
+	fmt.Fprintf(&b, "\n**GATE (deterministic: data_correctness + advisor_grounding): %s**\n", gate)
 	return b.String()
 }
 
