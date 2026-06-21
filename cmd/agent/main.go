@@ -112,16 +112,20 @@ func main() {
 	opener := func(ctx context.Context, agentVersion, question string) (agent.TrajectoryStore, error) {
 		return trajectory.New(ctx, trajDB, agentVersion, question, "production")
 	}
-	runner := eino_agent.New(client, registry, opener, schema.Digest())
+	digest := schema.Digest()
+	runner := eino_agent.New(client, registry, opener, digest)
 
 	// ── 选择模式 ──────────────────────────────────────────────────────────
+	if *advise && *q == "" {
+		log.Fatal("-advise 必须配合 -q 使用（REPL 暂不支持）")
+	}
 	if *q != "" {
 		if *advise {
 			playbook := ""
 			if schema.Advisor != nil {
 				playbook = schema.Advisor.Playbook
 			}
-			answer, draft, err := runAdvisePipeline(ctx, client, registry, schema.Digest(), playbook, *q)
+			answer, draft, err := runAdvisePipeline(ctx, client, registry, digest, playbook, *q)
 			if err != nil {
 				log.Fatalf("advise pipeline error: %v", err)
 			}

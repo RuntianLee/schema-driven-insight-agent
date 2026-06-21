@@ -52,3 +52,10 @@ func TestRunAdvisePipeline(t *testing.T) {
 		t.Errorf("render=%q", out)
 	}
 }
+
+func TestRenderAdvisoryEmpty(t *testing.T) {
+	out := renderAdvisory(contract.AdvisoryDraft{Summary: "测试", Items: nil})
+	if !strings.Contains(out, "无可靠依据") {
+		t.Errorf("empty items fallback missing, got: %q", out)
+	}
+}
