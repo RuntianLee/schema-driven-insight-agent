@@ -13,5 +13,5 @@ evaluators:
   advisor_grounding:
     min_items: 1
   reasoning_quality:
-    rubric: "建议是否对口存量分布、是否聚焦高价值玩家？"
+    rubric: "是否识别头部玩家货币存量集中并量化？"
     min_score: 3

@@ -13,5 +13,5 @@ evaluators:
   advisor_grounding:
     min_items: 1
   reasoning_quality:
-    rubric: "建议是否对口各国流失差异、是否分市场？"
+    rubric: "是否对比各国流失差异并量化？"
     min_score: 3
