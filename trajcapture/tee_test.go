@@ -3,10 +3,14 @@ package trajcapture
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
+	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
+
+	_ "modernc.org/sqlite"
 )
 
 // fakeRec 是最小 agent.TrajectoryStore，记录是否被双扇到。
@@ -66,4 +70,60 @@ func TestTeeFansReasoningToBoth(t *testing.T) {
 		t.Errorf("rec.reasoning=%d want 1：RecordReasoning 未扇到持久化侧", rec.reasoning)
 	}
 	// cap.RecordReasoning 是空操作；同上只验证不 panic。
+}
+
+// TestTeeWithRealSQLite 端到端验证 Tee.RecordToolCall 同时落库到真实 SQLite（恢复被删的
+// eval_harness/runners.TestTeeStore_FansOutToCaptureAndSQLite 的等价覆盖）。
+func TestTeeWithRealSQLite(t *testing.T) {
+	ctx := context.Background()
+
+	// 打开真实 SQLite 并建表。
+	db, err := trajectory.Open(filepath.Join(t.TempDir(), "traj.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := trajectory.Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// 构造真实 Recorder，包在 Tee 里。
+	rec, err := trajectory.New(ctx, db, "v0.1.0", "test-question", "benchmark")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cap := New()
+	tee := NewTee(cap, rec)
+
+	// 调用一次 RecordToolCall，然后 Finalize。
+	now := time.Now()
+	tee.RecordToolCall(
+		"query_distribution",
+		map[string]any{"table": "player_basics"},
+		contract.Response{Status: contract.StatusOK},
+		now, now, nil,
+	)
+	if err := tee.Finalize(ctx, "success", "答案", ""); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	// 内存侧：Capture 必须捕获到 1 条工具调用。
+	if got := len(cap.ToolCalls()); got != 1 {
+		t.Errorf("cap.ToolCalls() len = %d, want 1", got)
+	}
+
+	// SQLite 侧：trajectory_steps 应有 1 条 tool_call 类型的记录。
+	var stepN int
+	db.QueryRow(
+		`SELECT count(*) FROM trajectory_steps WHERE trajectory_id=? AND step_type='tool_call'`,
+		tee.TrajectoryID(),
+	).Scan(&stepN)
+	if stepN != 1 {
+		t.Errorf("SQLite persisted tool_call steps = %d, want 1", stepN)
+	}
+
+	// TrajectoryID 必须来自持久化侧（rec），而非内存侧的固定字符串 "capture"。
+	if tee.TrajectoryID() != rec.TrajectoryID() {
+		t.Errorf("tee.TrajectoryID()=%q != rec.TrajectoryID()=%q", tee.TrajectoryID(), rec.TrajectoryID())
+	}
 }
