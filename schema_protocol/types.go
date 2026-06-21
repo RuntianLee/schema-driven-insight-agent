@@ -9,8 +9,14 @@ type Schema struct {
 	StateTables   map[string]Table
 	DerivedTables map[string]Table
 	Glossary      Glossary
-	Tuning        Tuning     // 可选画像/查询阈值（缺省由 tool 侧用 framework 常量回退）
-	ETLPolicy     *ETLPolicy // 可选 ETL 运行参数；nil = 未声明（旧 schema 兼容）
+	Tuning        Tuning         // 可选画像/查询阈值（缺省由 tool 侧用 framework 常量回退）
+	ETLPolicy     *ETLPolicy     // 可选 ETL 运行参数；nil = 未声明（旧 schema 兼容）
+	Advisor       *AdvisorPolicy // 可选 Advisor 运营 playbook；nil = 未声明
+}
+
+// AdvisorPolicy 承载 adapter 提供给 Advisor 的运营 playbook（framework 当不透明文本透传，不解读业务含义）。
+type AdvisorPolicy struct {
+	Playbook string
 }
 
 // ETLPolicy 承载 ETL 运行参数——原 adapter etl.go 手写常量归位 schema（零代码接入 v0.2）。
