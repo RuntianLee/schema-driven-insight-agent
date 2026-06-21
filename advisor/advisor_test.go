@@ -3,6 +3,8 @@ package advisor
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
@@ -49,5 +51,26 @@ func TestAdviseEmptyOnNoJSON(t *testing.T) {
 	_, err := a.Advise(context.Background(), sampleOutput(), "")
 	if err == nil {
 		t.Fatal("无 JSON 应报错")
+	}
+}
+
+// errLLM 是模拟 llm.Client.Call 返回错误的桩。
+var errBoom = errors.New("upstream timeout")
+
+type errLLM struct{}
+
+func (errLLM) Call(_ context.Context, _ string) (string, int, int, float64, error) {
+	return "", 0, 0, 0, errBoom
+}
+func (errLLM) Model() string { return "err" }
+
+func TestAdvisePropagatesLLMError(t *testing.T) {
+	a := New(errLLM{}, "SYS")
+	_, err := a.Advise(context.Background(), sampleOutput(), "")
+	if err == nil || !strings.Contains(err.Error(), "advisor llm call") {
+		t.Fatalf("want wrapped llm error, got %v", err)
+	}
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("error should wrap errBoom via %%w, got %v", err)
 	}
 }
