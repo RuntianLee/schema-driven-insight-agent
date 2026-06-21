@@ -240,11 +240,12 @@ func toTaskInput(t tasks.Task) runners.TaskInput {
 		evals[k] = v
 	}
 	return runners.TaskInput{
-		ID:         t.ID,
-		Title:      t.Title,
-		Question:   t.Question,
-		LLMTurns:   t.LLMTurns,
-		Evaluators: evals,
+		ID:          t.ID,
+		Title:       t.Title,
+		Question:    t.Question,
+		LLMTurns:    t.LLMTurns,
+		AdvisorTurn: t.AdvisorTurn,
+		Evaluators:  evals,
 	}
 }
 
