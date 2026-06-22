@@ -30,6 +30,36 @@ func b2f(b bool) float64 {
 	return 0
 }
 
+// TestBuildABReport_AnswerGroundingAggregated 验证 AB 报告把 answer_grounding 作为
+// 第二个 judge 维度聚合（与 reasoning_quality 并列，off-gate）。
+func TestBuildABReport_AnswerGroundingAggregated(t *testing.T) {
+	mk := func(agVal float64) *Report {
+		r := NewReport([]string{"data_correctness", "reasoning_quality", "answer_grounding"})
+		r.Add("t", evaluators.Score{Evaluator: "data_correctness", Value: 1, Pass: true}, true)
+		r.Add("t", evaluators.Score{Evaluator: "reasoning_quality", Value: 0.6, Pass: false}, false)
+		r.Add("t", evaluators.Score{Evaluator: "answer_grounding", Value: agVal, Pass: false}, false)
+		return r
+	}
+	a := []*Report{mk(0.8), mk(0.8)}
+	b := []*Report{mk(1.0), mk(1.0)}
+	ab, err := BuildABReport("A", "B", 2, a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ab.MeanAgA != 0.8 || ab.MeanAgB != 1.0 {
+		t.Fatalf("MeanAg A/B 不对: %.2f %.2f", ab.MeanAgA, ab.MeanAgB)
+	}
+	if d := ab.MeanAgDelta; d < 0.199 || d > 0.201 {
+		t.Fatalf("MeanAgDelta 不对: %.4f", d)
+	}
+	if len(ab.Tasks) != 1 || ab.Tasks[0].AgA != 0.8 || ab.Tasks[0].AgB != 1.0 {
+		t.Fatalf("per-task Ag 不对: %+v", ab.Tasks)
+	}
+	if !strings.Contains(ab.ConsoleTable(), "grounding") {
+		t.Fatalf("控制台表应含 grounding 行:\n%s", ab.ConsoleTable())
+	}
+}
+
 func TestBuildABReport_DeltaAndMeets20(t *testing.T) {
 	a := []*Report{repWith("t1", false), repWith("t1", false), repWith("t1", false), repWith("t1", false)}
 	b := []*Report{repWith("t1", true), repWith("t1", true), repWith("t1", true), repWith("t1", true)}

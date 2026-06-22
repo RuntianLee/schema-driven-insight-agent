@@ -1,0 +1,135 @@
+package evaluators
+
+import (
+	"context"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/RuntianLee/schema-driven-insight-agent/contract"
+	"github.com/RuntianLee/schema-driven-insight-agent/llm"
+	"gopkg.in/yaml.v3"
+)
+
+func TestParseAnswerGroundingReply_FullLedger(t *testing.T) {
+	raw := "```json\n" + `{"score":4,"claims":[
+		{"claim":"次日流失42%","status":"grounded","evidence":"q2.churn_d1=0.42"},
+		{"claim":"ARPU 12.5","status":"ungrounded","evidence":"q1..q3 无此值"}
+	],"reason":"一处悬空"}` + "\n```"
+	got, err := parseAnswerGroundingReply(raw)
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if got.Score != 4 || len(got.Claims) != 2 {
+		t.Fatalf("score/claims 不对: %+v", got)
+	}
+	if got.Claims[1].Status != "ungrounded" || got.Claims[1].Claim != "ARPU 12.5" {
+		t.Fatalf("第二条主张解析错: %+v", got.Claims[1])
+	}
+}
+
+func TestParseAnswerGroundingReply_ScoreOutOfRange(t *testing.T) {
+	if _, err := parseAnswerGroundingReply(`{"score":7,"claims":[],"reason":"x"}`); err == nil {
+		t.Fatal("score=7 越界应报错")
+	}
+}
+
+func TestParseAnswerGroundingReply_NotJSON(t *testing.T) {
+	if _, err := parseAnswerGroundingReply("没有花括号"); err == nil {
+		t.Fatal("非 JSON 应报错")
+	}
+}
+
+func agSpecNode(t *testing.T, rubric string, min int) *yaml.Node {
+	t.Helper()
+	var n yaml.Node
+	body := "rubric: " + rubric + "\nmin_score: " + strconv.Itoa(min)
+	if err := yaml.Unmarshal([]byte(body), &n); err != nil {
+		t.Fatal(err)
+	}
+	return n.Content[0]
+}
+
+func TestAnswerGrounding_NameAndKind(t *testing.T) {
+	e := NewAnswerGrounding(NewMockJudge())
+	if e.Name() != "answer_grounding" || e.Deterministic() {
+		t.Fatalf("Name/Deterministic 不对: %s %v", e.Name(), e.Deterministic())
+	}
+}
+
+func TestAnswerGrounding_BelowMin(t *testing.T) {
+	c := constJudge(`{"score":2,"claims":[{"claim":"ARPU 12.5","status":"ungrounded","evidence":"无"}],"reason":"悬空"}`)
+	e := NewAnswerGrounding(c)
+	res := TaskResult{Answer: "ARPU 12.5", ToolCalls: []contract.ToolCall{{Name: "analyze"}}}
+	sc, err := e.Evaluate(context.Background(), res, agSpecNode(t, "x", 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.Value != 2.0/5.0 || !sc.BelowMin {
+		t.Fatalf("Value/BelowMin 不对: %+v", sc)
+	}
+	if !strings.Contains(sc.Detail, "ARPU 12.5") {
+		t.Fatalf("Detail 应含未接地主张: %q", sc.Detail)
+	}
+}
+
+func TestAnswerGrounding_ErroredNotFolded(t *testing.T) {
+	// flakyJudge{failN,calls,ok} 已存在于 judge_test.go；failN=judgeMaxAttempts → 三次全失败。
+	e := NewAnswerGrounding(&flakyJudge{failN: judgeMaxAttempts})
+	sc, err := e.Evaluate(context.Background(), TaskResult{}, agSpecNode(t, "x", 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sc.Errored || sc.Value != 0 {
+		t.Fatalf("耗尽重试应 Errored 且不向上 error: %+v", sc)
+	}
+}
+
+// TestAnswerGrounding_RealLLM_Discriminates 是真 LLM 判别力冒烟（阶梯①）：
+// 默认 skip，仅 AG_SMOKE=1 时跑，避免日常烧 token。
+// 凭证：ResolveStrict 读 AG_CONFIG 指向的配置文件；不存在则回退 MINIMAX_API_KEY 环境变量。
+func TestAnswerGrounding_RealLLM_Discriminates(t *testing.T) {
+	if os.Getenv("AG_SMOKE") != "1" {
+		t.Skip("AG_SMOKE!=1：跳过真 LLM 冒烟")
+	}
+	client, err := llm.ResolveStrict(os.Getenv("AG_CONFIG")) // 同 ab.go:32 解析路径
+	if err != nil {
+		t.Fatalf("构造真 judge 失败（检查 AG_CONFIG 指向 minimax 配置 或 设 MINIMAX_API_KEY）: %v", err)
+	}
+	e := NewAnswerGrounding(client)
+
+	// 结构化结果：server_id=1 avg_money=2000, server_id=2 avg_money=8000（无 ARPU 这列、无 12.5）
+	calls := []contract.ToolCall{{Name: "analyze", Response: contract.Response{
+		Status: contract.StatusOK,
+		Table: &contract.TableResult{
+			Columns:  []contract.ColumnMeta{{Name: "server_id"}, {Name: "avg_money"}},
+			Rows:     [][]any{{1, 2000.0}, {2, 8000.0}},
+			RowCount: 2,
+		},
+	}}}
+	rubric := "逐个检查回答里的定量主张（数字/阈值/比较/比例）是否接地：逐字出现在某 qN 结果、或可由结果单元格合法派生（比例/倍数/差值/百分比）、或取整四舍五入后一致、或来自问题本身给定的阈值，均判 grounded；结果中找不到也无法派生判 ungrounded。score=5 全部接地；每出现一个未接地主张显著扣分，核心结论编造扣更重；score=1 多数定量主张悬空。"
+	spec := agSpecNode(t, rubric, 4)
+
+	// 正样本：派生量 8000/2000=4 倍合法 → 高分、无 ungrounded
+	pos := TaskResult{Answer: "1 服人均 2000，2 服人均 8000，2 服人均高出 4 倍。", ToolCalls: calls}
+	scPos, err := e.Evaluate(context.Background(), pos, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("正样本: %s | %s", scPos.Display, scPos.Detail)
+	if scPos.Value < 4.0/5.0 || strings.Contains(scPos.Detail, "未接地") {
+		t.Fatalf("正样本（合法派生 4 倍）应高分无未接地: %+v", scPos)
+	}
+
+	// 负样本：ARPU 12.5 凭空 → 跌破 min 且点名 12.5
+	neg := TaskResult{Answer: "1 服人均 2000，2 服人均 8000，ARPU 高达 12.5。", ToolCalls: calls}
+	scNeg, err := e.Evaluate(context.Background(), neg, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("负样本: %s | %s", scNeg.Display, scNeg.Detail)
+	if !scNeg.BelowMin || !strings.Contains(scNeg.Detail, "12.5") {
+		t.Fatalf("负样本（凭空 12.5）应 BelowMin 且 Detail 点名 12.5: %+v", scNeg)
+	}
+}
