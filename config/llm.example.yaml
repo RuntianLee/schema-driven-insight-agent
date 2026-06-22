@@ -19,3 +19,12 @@ api_key_env: MINIMAX_API_KEY
 # gitignored by default). Never commit a file that contains a raw secret.
 
 timeout_seconds: 60
+
+# max_tokens 封顶单次生成（0 或省略 = 不发该字段，模型用默认上限）。
+# 实证：对慢的推理模型/代理（如经 answer_grounding judge 的大 prompt），不封顶会触发
+# 上百秒生成 + 网关超时；设 max_tokens（如 2000）把单次调用从 ~150s 压到 ~30-45s，
+# 且不损判官判别力。给足以容纳期望输出，过小会截断。
+max_tokens: 2000
+
+# temperature 采样温度（省略 = 不发）。eval/judge 建议 0：确定性 + 通常更快收敛。
+temperature: 0

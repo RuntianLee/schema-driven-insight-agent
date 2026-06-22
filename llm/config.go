@@ -16,12 +16,14 @@ import (
 // YAML never contains a raw key. If api_key is set inline, config/llm.yaml MUST
 // be gitignored (it already is by default).
 type MiniMaxConfig struct {
-	Provider       string `yaml:"provider"`
-	Endpoint       string `yaml:"endpoint"`
-	Model          string `yaml:"model"`
-	APIKeyEnv      string `yaml:"api_key_env"`
-	APIKey         string `yaml:"api_key"` // inline, optional; never log this
-	TimeoutSeconds int    `yaml:"timeout_seconds"`
+	Provider       string   `yaml:"provider"`
+	Endpoint       string   `yaml:"endpoint"`
+	Model          string   `yaml:"model"`
+	APIKeyEnv      string   `yaml:"api_key_env"`
+	APIKey         string   `yaml:"api_key"` // inline, optional; never log this
+	TimeoutSeconds int      `yaml:"timeout_seconds"`
+	MaxTokens      int      `yaml:"max_tokens"`  // 0 = 不发（保持现状）；>0 封顶生成，防慢响应/截断
+	Temperature    *float64 `yaml:"temperature"` // nil = 不发；设 0 = 确定性
 }
 
 // ParseMiniMaxConfig parses YAML bytes into MiniMaxConfig and applies defaults
@@ -72,5 +74,5 @@ func NewMiniMaxFromConfig(cfg MiniMaxConfig) (Client, error) {
 		return nil, err
 	}
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
-	return newMiniMaxFull(key, cfg.Model, cfg.Endpoint, timeout), nil
+	return newMiniMaxFull(key, cfg.Model, cfg.Endpoint, timeout, cfg.MaxTokens, cfg.Temperature), nil
 }

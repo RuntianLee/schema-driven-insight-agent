@@ -18,40 +18,47 @@ const (
 )
 
 type minimaxClient struct {
-	apiKey   string
-	model    string
-	endpoint string
-	http     *http.Client
+	apiKey      string
+	model       string
+	endpoint    string
+	http        *http.Client
+	maxTokens   int      // 0 = 不发
+	temperature *float64 // nil = 不发
 }
 
 // NewMiniMax constructs a MiniMax M2.7 HTTP client (design-v3 §4 LLM Provider).
 // If model is empty, defaults to "MiniMax-M2.7".
-// Endpoint defaults to minimaxEndpoint; timeout defaults to 60 s.
+// Endpoint defaults to minimaxEndpoint; timeout defaults to 60 s；不发 max_tokens/temperature。
 func NewMiniMax(apiKey, model string) Client {
 	if model == "" {
 		model = "MiniMax-M2.7"
 	}
-	return newMiniMaxFull(apiKey, model, minimaxEndpoint, 60*time.Second)
+	return newMiniMaxFull(apiKey, model, minimaxEndpoint, 60*time.Second, 0, nil)
 }
 
 // newMiniMaxFull is the internal constructor used by NewMiniMaxFromConfig.
 // NOTE(T0/T8): endpoint URL, auth header, and JSON field names are structurally
 // correct anchors based on typical MiniMax API conventions. Verify against the
 // official MiniMax docs before production use — fields may differ from actual API.
-func newMiniMaxFull(apiKey, model, endpoint string, timeout time.Duration) Client {
+// maxTokens<=0 / temperature==nil 时不发对应字段（保持现状）。
+func newMiniMaxFull(apiKey, model, endpoint string, timeout time.Duration, maxTokens int, temperature *float64) Client {
 	return &minimaxClient{
-		apiKey:   apiKey,
-		model:    model,
-		endpoint: endpoint,
-		http:     &http.Client{Timeout: timeout},
+		apiKey:      apiKey,
+		model:       model,
+		endpoint:    endpoint,
+		http:        &http.Client{Timeout: timeout},
+		maxTokens:   maxTokens,
+		temperature: temperature,
 	}
 }
 
 func (c *minimaxClient) Model() string { return c.model }
 
 type chatReq struct {
-	Model    string    `json:"model"`
-	Messages []message `json:"messages"`
+	Model       string    `json:"model"`
+	Messages    []message `json:"messages"`
+	MaxTokens   int       `json:"max_tokens,omitempty"`  // 0 省略
+	Temperature *float64  `json:"temperature,omitempty"` // nil 省略
 }
 
 type message struct {
@@ -77,8 +84,10 @@ type chatResp struct {
 // Returns an error for non-2xx HTTP status or a non-zero base_resp.status_code.
 func (c *minimaxClient) Call(ctx context.Context, prompt string) (string, int, int, float64, error) {
 	body, _ := json.Marshal(chatReq{
-		Model:    c.model,
-		Messages: []message{{Role: "user", Content: prompt}},
+		Model:       c.model,
+		Messages:    []message{{Role: "user", Content: prompt}},
+		MaxTokens:   c.maxTokens,
+		Temperature: c.temperature,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
