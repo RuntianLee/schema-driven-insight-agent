@@ -19,6 +19,10 @@ type ABTaskDelta struct {
 	JudgeB    float64 `json:"judge_b"`
 	JudgeErrA int     `json:"judge_err_a"` // reasoning_quality Errored 次数（已排除出均值）
 	JudgeErrB int     `json:"judge_err_b"`
+	AgA       float64 `json:"ag_a"` // answer_grounding 均值（叙述忠实度，off-gate）
+	AgB       float64 `json:"ag_b"`
+	AgErrA    int     `json:"ag_err_a"` // answer_grounding Errored 次数（已排除出均值）
+	AgErrB    int     `json:"ag_err_b"`
 }
 
 // ABReport 是 A/B 聚合结果。MinSuite/MaxSuite 是每轮 suite 级通过率的极差（方差信号）。
@@ -41,6 +45,11 @@ type ABReport struct {
 	Meets20PctJudge           bool          `json:"meets_20pct_judge"`
 	JudgeErrA                 int           `json:"judge_err_a"` // 全任务 reasoning_quality Errored 总数（A 配置）
 	JudgeErrB                 int           `json:"judge_err_b"` // 全任务 reasoning_quality Errored 总数（B 配置）
+	MeanAgA                   float64       `json:"mean_ag_a"`   // 全任务 answer_grounding 均值（A 配置）
+	MeanAgB                   float64       `json:"mean_ag_b"`
+	MeanAgDelta               float64       `json:"mean_ag_delta"`
+	AgErrA                    int           `json:"ag_err_a"` // 全任务 answer_grounding Errored 总数（A 配置）
+	AgErrB                    int           `json:"ag_err_b"` // 全任务 answer_grounding Errored 总数（B 配置）
 	ReflectionMode            string        `json:"reflection_mode,omitempty"`
 	MemoryEnabled             bool          `json:"memory_enabled"`
 	MemoryDBPath              string        `json:"memory_db_path,omitempty"`
@@ -60,6 +69,7 @@ type ABReport struct {
 
 const dcEval = "data_correctness"
 const rqEval = "reasoning_quality"
+const agEval = "answer_grounding"
 
 // BuildABReport 从两配置各 runs 次的 Report 聚合 A/B 增益。
 // aReports/bReports 长度均须 == runs；任务集取自第一份 A 报告（稳定顺序）。
@@ -77,16 +87,21 @@ func BuildABReport(labelA, labelB string, runs int, aReports, bReports []*Report
 	for _, tid := range taskIDs {
 		pa := passRateAcross(aReports, tid)
 		pb := passRateAcross(bReports, tid)
-		ja, jb := judgeErrAcross(aReports, tid), judgeErrAcross(bReports, tid)
+		ja, jb := judgeErrAcross(aReports, tid, rqEval), judgeErrAcross(bReports, tid, rqEval)
+		aga, agb := judgeErrAcross(aReports, tid, agEval), judgeErrAcross(bReports, tid, agEval)
 		ab.Tasks = append(ab.Tasks, ABTaskDelta{
 			TaskID: tid, PassRateA: pa, PassRateB: pb, Delta: pb - pa,
-			JudgeA: judgeMeanAcross(aReports, tid), JudgeB: judgeMeanAcross(bReports, tid),
+			JudgeA: judgeMeanAcross(aReports, tid, rqEval), JudgeB: judgeMeanAcross(bReports, tid, rqEval),
 			JudgeErrA: ja, JudgeErrB: jb,
+			AgA: judgeMeanAcross(aReports, tid, agEval), AgB: judgeMeanAcross(bReports, tid, agEval),
+			AgErrA: aga, AgErrB: agb,
 		})
 		sumA += pa
 		sumB += pb
 		ab.JudgeErrA += ja
 		ab.JudgeErrB += jb
+		ab.AgErrA += aga
+		ab.AgErrB += agb
 	}
 	n := float64(len(taskIDs))
 	if n > 0 {
@@ -96,17 +111,22 @@ func BuildABReport(labelA, labelB string, runs int, aReports, bReports []*Report
 	ab.MeanDelta = ab.MeanPassRateB - ab.MeanPassRateA
 	ab.Meets20Pct = ab.MeanDelta >= 0.20
 
-	var sumJA, sumJB float64
+	var sumJA, sumJB, sumAgA, sumAgB float64
 	for _, t := range ab.Tasks {
 		sumJA += t.JudgeA
 		sumJB += t.JudgeB
+		sumAgA += t.AgA
+		sumAgB += t.AgB
 	}
 	if n > 0 {
 		ab.MeanJudgeA = sumJA / n
 		ab.MeanJudgeB = sumJB / n
+		ab.MeanAgA = sumAgA / n
+		ab.MeanAgB = sumAgB / n
 	}
 	ab.MeanJudgeDelta = ab.MeanJudgeB - ab.MeanJudgeA
 	ab.Meets20PctJudge = ab.MeanJudgeDelta >= 0.20
+	ab.MeanAgDelta = ab.MeanAgB - ab.MeanAgA
 
 	ab.MinSuiteA, ab.MaxSuiteA = suiteRange(aReports, taskIDs)
 	ab.MinSuiteB, ab.MaxSuiteB = suiteRange(bReports, taskIDs)
@@ -129,11 +149,12 @@ func passRateAcross(reps []*Report, taskID string) float64 {
 	return float64(pass) / float64(len(reps))
 }
 
-func judgeMeanAcross(reps []*Report, taskID string) float64 {
+// judgeMeanAcross 统计某任务在多份报告里 evalName judge 的 Value 均值（排除 Errored，不折 0）。
+func judgeMeanAcross(reps []*Report, taskID, evalName string) float64 {
 	var sum float64
 	var cnt int
 	for _, r := range reps {
-		if s, ok := r.Scores[taskID][rqEval]; ok && !s.Errored {
+		if s, ok := r.Scores[taskID][evalName]; ok && !s.Errored {
 			sum += s.Value
 			cnt++
 		}
@@ -144,11 +165,11 @@ func judgeMeanAcross(reps []*Report, taskID string) float64 {
 	return sum / float64(cnt)
 }
 
-// judgeErrAcross 统计某任务在多份报告里 reasoning_quality Errored 的次数。
-func judgeErrAcross(reps []*Report, taskID string) int {
+// judgeErrAcross 统计某任务在多份报告里 evalName judge Errored 的次数。
+func judgeErrAcross(reps []*Report, taskID, evalName string) int {
 	var cnt int
 	for _, r := range reps {
-		if s, ok := r.Scores[taskID][rqEval]; ok && s.Errored {
+		if s, ok := r.Scores[taskID][evalName]; ok && s.Errored {
 			cnt++
 		}
 	}
@@ -192,8 +213,13 @@ func (r *ABReport) ConsoleTable() string {
 		r.MeanPassRateA, r.MeanPassRateB, r.MeanDelta, r.Meets20Pct)
 	fmt.Fprintf(&b, "MEAN judge(reasoning)\t%.2f\t%.2f\t%+.2f  (≥0.20: %v)\n",
 		r.MeanJudgeA, r.MeanJudgeB, r.MeanJudgeDelta, r.Meets20PctJudge)
+	fmt.Fprintf(&b, "MEAN judge(grounding)\t%.2f\t%.2f\t%+.2f\n",
+		r.MeanAgA, r.MeanAgB, r.MeanAgDelta)
 	if r.JudgeErrA > 0 || r.JudgeErrB > 0 {
 		fmt.Fprintf(&b, "judge errors\tA=%d\tB=%d  (已排除出均值，未折 0)\n", r.JudgeErrA, r.JudgeErrB)
+	}
+	if r.AgErrA > 0 || r.AgErrB > 0 {
+		fmt.Fprintf(&b, "grounding errors\tA=%d\tB=%d  (已排除出均值，未折 0)\n", r.AgErrA, r.AgErrB)
 	}
 	if r.Caveat != "" {
 		b.WriteString("CAVEAT: " + r.Caveat + "\n")
