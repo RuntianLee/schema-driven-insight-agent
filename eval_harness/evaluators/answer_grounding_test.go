@@ -2,6 +2,7 @@ package evaluators
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
@@ -83,6 +84,39 @@ func TestAnswerGrounding_ErroredNotFolded(t *testing.T) {
 	}
 	if !sc.Errored || sc.Value != 0 {
 		t.Fatalf("耗尽重试应 Errored 且不向上 error: %+v", sc)
+	}
+}
+
+// TestCompactResponse_ShrinksYetKeepsKeyNumbers 验证压缩器砍掉臃肿数组（TopN/嵌套 Data）
+// 但保留可被答案引用的聚合统计（每组 count/mean/median/percentiles、表格行）。
+func TestCompactResponse_ShrinksYetKeepsKeyNumbers(t *testing.T) {
+	// 构造臃肿 Response：5 组，每组带满 TopN + 嵌套 Data（json.Marshal 会很大）。
+	mkGroup := func(name string, mean, p99 float64) contract.GroupProfile {
+		topN := make([]contract.TopRow, 20)
+		data := make([]contract.BucketRow, 20)
+		return contract.GroupProfile{
+			Group:   name,
+			Profile: contract.DistProfile{Count: 1000, Mean: mean, Median: mean - 5, Min: 0, Max: p99 + 100, P90: p99 - 50, P95: p99 - 10, P99: p99, TopN: topN},
+			Data:    data,
+		}
+	}
+	resp := contract.Response{
+		Status: contract.StatusOK,
+		Groups: []contract.GroupProfile{
+			mkGroup("1", 2000, 9000), mkGroup("2", 8000, 40000),
+			mkGroup("3", 3000, 12000), mkGroup("4", 5000, 22000), mkGroup("5", 1000, 4000),
+		},
+	}
+	full, _ := json.Marshal(resp)
+	compact := compactResponse(resp)
+	if len(compact) >= len(full) {
+		t.Fatalf("压缩应更短: compact=%d full=%d", len(compact), len(full))
+	}
+	// 关键数字必须保留：组 2 的 mean=8000 与 p99=40000 都该在压缩文本里。
+	for _, want := range []string{"8000", "40000", "[2]", "count=1000"} {
+		if !strings.Contains(compact, want) {
+			t.Fatalf("压缩丢了关键信息 %q:\n%s", want, compact)
+		}
 	}
 }
 
