@@ -1,0 +1,34 @@
+# held-out · composite —— 高信用分(>=700)+不活跃 客群，按年龄段交叉看流失率。
+id: inactive_highcs_churn_by_age_insight
+title: "高信用不活跃客户按年龄的流失（held-out）"
+question: "高信用分(>=700)但不活跃(IsActiveMember=0)的客户，其流失率按年龄段交叉看有何差异？运营含义？"
+llm_turns:
+  - '{"tool":"analyze","args":{"table":"customers","filters":[{"field":"CreditScore","op":">=","value":700},{"field":"IsActiveMember","op":"=","value":0}],"group_by":["Age"],"aggregates":[{"fn":"count","as":"n"},{"fn":"avg","column":"Exited","as":"churn_rate"}],"order_by":[{"key":"Age"}]}}'
+  - "高信用且不活跃客群中，年长段(55 岁)流失率 0.6，远高于年轻段(35 岁)的 0.2。先锁定过滤群体（CreditScore>=700 且 IsActiveMember=0）、再按年龄分组——年龄是关键调节维度，应对年长高信用客户优先唤醒/挽留。"
+fixture:
+  tables:
+    customers:
+      groups:
+        - {count: 40, values: {Age: 35, CreditScore: 720, IsActiveMember: 0, Exited: 0}}
+        - {count: 10, values: {Age: 35, CreditScore: 720, IsActiveMember: 0, Exited: 1}}
+        - {count: 20, values: {Age: 55, CreditScore: 720, IsActiveMember: 0, Exited: 0}}
+        - {count: 30, values: {Age: 55, CreditScore: 720, IsActiveMember: 0, Exited: 1}}
+        - {count: 50, values: {Age: 45, CreditScore: 650, IsActiveMember: 1, Exited: 0}}
+evaluators:
+  data_correctness:
+    tool: analyze
+    expect_status: OK
+    table:
+      - match: {Age: "35"}
+        expect_any: [{columns: ["churn_rate"], value: 0.2}]
+      - match: {Age: "55"}
+        expect_any: [{columns: ["churn_rate"], value: 0.6}]
+  reasoning_quality:
+    rubric: "按 5 项打分（满分 5）：(1)正确给出两年龄段流失率（35 岁 0.2、55 岁 0.6）；(2)量化年长段显著更高（约 3 倍）；(3)明确把口径拆成可验证单步——先过滤群体（CreditScore>=700 且 IsActiveMember=0）、再按年龄分组，避免维度污染；(4)指出年龄是关键调节维度、不交叉会掩盖差异；(5)给出按年龄差异化的唤醒/挽留建议。"
+    min_score: 5
+  insight_novelty:
+    rubric: "是否点出复合口径需拆步、年龄交叉揭示被均值掩盖的差异？"
+    min_score: 3
+  answer_grounding:
+    rubric: "逐个检查定量主张是否接地：逐字出现在 qN 结果、或合法派生（0.6/0.2=3 倍）、或问题给定阈值（700），判 grounded；否则 ungrounded。score=5 全接地；每个未接地主张显著扣分；score=1 多数悬空。"
+    min_score: 4
