@@ -20,9 +20,9 @@ evaluators:
     expect_status: OK
     table:
       - match: {Age: "35"}
-        expect_any: [{columns: ["churn_rate"], value: 0.2}]
+        expect_pos: {2: 0.2}
       - match: {Age: "55"}
-        expect_any: [{columns: ["churn_rate"], value: 0.6}]
+        expect_pos: {2: 0.6}
   reasoning_quality:
     rubric: "按 5 项打分（满分 5）：(1)正确给出两年龄段流失率（35 岁 0.2、55 岁 0.6）；(2)量化年长段显著更高（约 3 倍）；(3)明确把口径拆成可验证单步——先过滤群体（CreditScore>=700 且 IsActiveMember=0）、再按年龄分组，避免维度污染；(4)指出年龄是关键调节维度、不交叉会掩盖差异；(5)给出按年龄差异化的唤醒/挽留建议。"
     min_score: 5

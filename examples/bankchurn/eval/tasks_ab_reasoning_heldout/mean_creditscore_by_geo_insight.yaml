@@ -20,11 +20,11 @@ evaluators:
     expect_status: OK
     table:
       - match: {Geography: France}
-        expect_any: [{columns: ["avg_cs"], value: 650}]
+        expect_pos: {1: 650}
       - match: {Geography: Germany}
-        expect_any: [{columns: ["avg_cs"], value: 651}]
+        expect_pos: {1: 651}
       - match: {Geography: Spain}
-        expect_any: [{columns: ["avg_cs"], value: 651}]
+        expect_pos: {1: 651}
   reasoning_quality:
     rubric: "按 5 项打分（满分 5）：(1)正确给出各地域人均信用分；(2)指出三者差异极小（1 分内）；(3)明确不应据近似均值排序信用质量、避免过度解读噪声；(4)给出具体分布判断——应看低分段占比/离散度而非只看均值；(5)据此给审慎结论（信用质量无显著地域差，勿据此差异化授信）。"
     min_score: 5

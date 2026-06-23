@@ -18,9 +18,9 @@ evaluators:
     expect_status: OK
     table:
       - match: {Exited: "0"}
-        expect_any: [{columns: ["n"], value: 12}]
+        expect_pos: {1: 12}
       - match: {Exited: "1"}
-        expect_any: [{columns: ["n"], value: 18}]
+        expect_pos: {1: 18}
   reasoning_quality:
     rubric: "按 5 项打分（满分 5）：(1)正确给出低信用分客户数（30）及流失/留存拆分（18/12）；(2)算出流失率 60%；(3)明确点明边界定义——信用分『严格小于 600』、开闭方向、口径可复现；(4)指出低信用分客群流失偏高；(5)给出结合风险评估的差异化挽留建议。"
     min_score: 5
