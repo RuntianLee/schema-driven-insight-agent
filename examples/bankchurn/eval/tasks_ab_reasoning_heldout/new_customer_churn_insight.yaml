@@ -1,0 +1,32 @@
+# held-out · threshold —— 在网时长 <2 年新客（严格小于）+ 流失率。扩列 Tenure。
+id: new_customer_churn_insight
+title: "新客规模与流失（held-out）"
+question: "在网时长(Tenure)不足 2 年的新客有多少？其流失率如何，运营含义？"
+llm_turns:
+  - '{"tool":"analyze","args":{"table":"customers","filters":[{"field":"Tenure","op":"<","value":2}],"group_by":["Exited"],"aggregates":[{"fn":"count","as":"n"}],"order_by":[{"key":"Exited"}]}}'
+  - "在网时长严格小于 2 年的新客共 20 人（边界：Tenure<2，含 0 和 1 年、不含 2 年）。其中 14 人已流失、6 人留存，流失率 70%。新客流失偏高，建议强化前 2 年的引导与权益留存。"
+fixture:
+  tables:
+    customers:
+      groups:
+        - {count: 14, values: {Tenure: 1, Exited: 1}}
+        - {count: 6,  values: {Tenure: 1, Exited: 0}}
+        - {count: 80, values: {Tenure: 5, Exited: 0}}
+evaluators:
+  data_correctness:
+    tool: analyze
+    expect_status: OK
+    table:
+      - match: {Exited: "0"}
+        expect_any: [{columns: ["n"], value: 6}]
+      - match: {Exited: "1"}
+        expect_any: [{columns: ["n"], value: 14}]
+  reasoning_quality:
+    rubric: "按 5 项打分（满分 5）：(1)正确给出新客数（20）及流失/留存拆分（14/6）；(2)算出流失率 70%；(3)明确点明边界定义——『Tenure 严格小于 2』、含 0/1 年不含 2 年、口径可复现；(4)指出新客流失偏高；(5)给出针对前 2 年引导/留存的建议。"
+    min_score: 5
+  insight_novelty:
+    rubric: "是否点明阈值边界口径（取值/开闭/方向）？"
+    min_score: 3
+  answer_grounding:
+    rubric: "逐个检查定量主张是否接地：逐字出现在 qN 结果、或合法派生（14/20=70%）、或问题给定阈值（2），判 grounded；否则 ungrounded。score=5 全接地；每个未接地主张显著扣分；score=1 多数悬空。"
+    min_score: 4
