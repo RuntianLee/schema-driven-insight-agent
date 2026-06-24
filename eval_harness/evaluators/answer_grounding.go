@@ -12,11 +12,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// claimVerdict 是判官对单个定量主张的判定 + 证据锚点。
+// claimVerdict 是判官对单个定量主张的判定 + 结构化接地锚。
+// Status 是判官软判（grounded|ungrounded）；Anchor/ClaimedValue 供确定性 resolver 复核。
 type claimVerdict struct {
-	Claim    string `json:"claim"`
-	Status   string `json:"status"` // "grounded" | "ungrounded"
-	Evidence string `json:"evidence"`
+	Claim        string  `json:"claim"`
+	Status       string  `json:"status"`
+	Anchor       string  `json:"anchor"`        // 单元格路径 或 派生式（OpCatalog 语法）
+	Kind         string  `json:"kind"`          // cell | derived
+	ClaimedValue float64 `json:"claimed_value"` // 判官从主张读到的数值（与 anchor 量纲一致）
 }
 
 // answerGroundingReply 是判官输出的完整定量主张台账。
@@ -66,29 +69,35 @@ func (a *AnswerGrounding) Evaluate(ctx context.Context, res TaskResult, spec *ya
 			Display: "解析失败", Detail: fmt.Sprintf("judge 输出无效: %v（原文 %q）", perr, raw)}, nil
 	}
 	below := sp.MinScore > 0 && reply.Score < sp.MinScore
+	verdicts := make([]AttributionVerdict, len(reply.Claims))
+	for i, c := range reply.Claims {
+		verdicts[i] = EvalAnchor(res.ToolCalls, c.Anchor, c.ClaimedValue, defaultAttrTol)
+	}
 	return Score{
 		Evaluator: a.Name(),
 		Value:     float64(reply.Score) / 5.0,
 		Pass:      false, // judge 永不参与 gate
 		BelowMin:  below,
 		Display:   fmt.Sprintf("%d/5 %s", reply.Score, markBelow(below)),
-		Detail:    renderLedger(reply),
+		Detail:    renderLedger(reply, verdicts),
 	}, nil
 }
 
-// renderLedger 渲染完整定量主张台账：先列未接地（疑似幻觉），再附 reason。
-func renderLedger(r answerGroundingReply) string {
+// renderLedger 渲染主张台账：每条带判官软判 + resolver 确定性裁决；附 attribution_resolved_rate 与 reason。
+func renderLedger(r answerGroundingReply, verdicts []AttributionVerdict) string {
 	var b strings.Builder
-	var ungrounded []string
-	for _, c := range r.Claims {
-		if c.Status == "ungrounded" {
-			ungrounded = append(ungrounded, fmt.Sprintf("「%s」(%s)", c.Claim, c.Evidence))
+	rate := AttributionRate(verdicts)
+	fmt.Fprintf(&b, "attribution_resolved_rate=%.2f（共 %d 条）。", rate, len(r.Claims))
+	for i, c := range r.Claims {
+		st := AttrUnresolvable
+		if i < len(verdicts) {
+			st = verdicts[i].Status
 		}
+		fmt.Fprintf(&b, " 「%s」judge=%s resolver=%s[%s];", c.Claim, c.Status, st, c.Anchor)
 	}
-	if len(ungrounded) > 0 {
-		b.WriteString("未接地: " + strings.Join(ungrounded, "; ") + "。")
+	if r.Reason != "" {
+		fmt.Fprintf(&b, " %s", r.Reason)
 	}
-	fmt.Fprintf(&b, "主张共 %d 条。%s", len(r.Claims), r.Reason)
 	return b.String()
 }
 
@@ -121,9 +130,15 @@ func buildAnswerGroundingPrompt(rubric, narrative string, calls []contract.ToolC
 %s
 """
 
-只输出严格 JSON（不要解释、不要 markdown 代码块）。claim 抄原文定量主张，evidence 简短（≤20 字）：
-{"score": <1-5 整数>, "claims": [{"claim":"<原文里的定量主张>","status":"grounded|ungrounded","evidence":"<接地的 qN.字段/派生式，或未接地说明>"}], "reason": "<一句话总评>"}`,
-		rubric, ev.String(), narrative)
+为每条定量主张给出**可机读接地锚** anchor：
+- 直接单元格：q{N}.profile.<字段> / q{N}.group[键].profile.<字段> / q{N}.bucket[键].<字段> / q{N}.table.row[i].<列名> / q{N}.groups_tail.<字段>（字段名照结构化结果里出现的写）。
+- 派生量：用算子包操作数路径，算子表：%s。例 ratio(q1.group[EU].profile.mean, q1.group[US].profile.mean)。
+- 找不到出处则 anchor 留空字符串。
+claimed_value 填你从该主张读到的数值，量纲与 anchor 单元格一致（占比用小数，如 42%%→0.42）。
+
+只输出严格 JSON（不要解释、不要 markdown 代码块）：
+{"score": <1-5 整数>, "claims": [{"claim":"<原文定量主张>","status":"grounded|ungrounded","anchor":"<路径或派生式或空>","kind":"cell|derived","claimed_value":<数值>}], "reason": "<一句话总评>"}`,
+		rubric, ev.String(), narrative, OpCatalog())
 }
 
 // compactResponse 把 contract.Response 压成保留聚合统计、砍掉臃肿数组（TopN / 每组

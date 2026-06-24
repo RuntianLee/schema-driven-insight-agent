@@ -15,8 +15,8 @@ import (
 
 func TestParseAnswerGroundingReply_FullLedger(t *testing.T) {
 	raw := "```json\n" + `{"score":4,"claims":[
-		{"claim":"次日流失42%","status":"grounded","evidence":"q2.churn_d1=0.42"},
-		{"claim":"ARPU 12.5","status":"ungrounded","evidence":"q1..q3 无此值"}
+		{"claim":"次日流失42%","status":"grounded","anchor":"q2.churn_d1","kind":"cell","claimed_value":0.42},
+		{"claim":"ARPU 12.5","status":"ungrounded","anchor":"","kind":"cell","claimed_value":12.5}
 	],"reason":"一处悬空"}` + "\n```"
 	got, err := parseAnswerGroundingReply(raw)
 	if err != nil {
@@ -27,6 +27,9 @@ func TestParseAnswerGroundingReply_FullLedger(t *testing.T) {
 	}
 	if got.Claims[1].Status != "ungrounded" || got.Claims[1].Claim != "ARPU 12.5" {
 		t.Fatalf("第二条主张解析错: %+v", got.Claims[1])
+	}
+	if got.Claims[0].Anchor != "q2.churn_d1" || got.Claims[0].ClaimedValue != 0.42 {
+		t.Fatalf("结构化锚解析错: %+v", got.Claims[0])
 	}
 }
 
@@ -60,7 +63,7 @@ func TestAnswerGrounding_NameAndKind(t *testing.T) {
 }
 
 func TestAnswerGrounding_BelowMin(t *testing.T) {
-	c := constJudge(`{"score":2,"claims":[{"claim":"ARPU 12.5","status":"ungrounded","evidence":"无"}],"reason":"悬空"}`)
+	c := constJudge(`{"score":2,"claims":[{"claim":"ARPU 12.5","status":"ungrounded","anchor":"","kind":"cell","claimed_value":12.5}],"reason":"悬空"}`)
 	e := NewAnswerGrounding(c)
 	res := TaskResult{Answer: "ARPU 12.5", ToolCalls: []contract.ToolCall{{Name: "analyze"}}}
 	sc, err := e.Evaluate(context.Background(), res, agSpecNode(t, "x", 4))
@@ -165,5 +168,44 @@ func TestAnswerGrounding_RealLLM_Discriminates(t *testing.T) {
 	t.Logf("负样本: %s | %s", scNeg.Display, scNeg.Detail)
 	if !scNeg.BelowMin || !strings.Contains(scNeg.Detail, "12.5") {
 		t.Fatalf("负样本（凭空 12.5）应 BelowMin 且 Detail 点名 12.5: %+v", scNeg)
+	}
+}
+
+func TestAnswerGrounding_DeterministicLedger(t *testing.T) {
+	c := constJudge(`{"score":3,"claims":[
+		{"claim":"EU 人均 3000","status":"grounded","anchor":"q1.group[EU].profile.mean","kind":"cell","claimed_value":3000},
+		{"claim":"ARPU 12.5","status":"ungrounded","anchor":"","kind":"cell","claimed_value":12.5}
+	],"reason":"一处悬空"}`)
+	e := NewAnswerGrounding(c)
+	res := TaskResult{Answer: "...", ToolCalls: []contract.ToolCall{
+		{Name: "analyze", Response: contract.Response{Status: contract.StatusOK,
+			Groups: []contract.GroupProfile{{Group: "EU", Profile: contract.DistProfile{Mean: 3000}}}}},
+	}}
+	sc, err := e.Evaluate(context.Background(), res, agSpecNode(t, "x", 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"attribution_resolved_rate=0.50", "resolved", "unresolvable"} {
+		if !strings.Contains(sc.Detail, want) {
+			t.Fatalf("Detail 缺 %q:\n%s", want, sc.Detail)
+		}
+	}
+}
+
+func TestAnswerGrounding_CatchesJudgeOverLenientMismatch(t *testing.T) {
+	c := constJudge(`{"score":5,"claims":[
+		{"claim":"EU 人均 9999","status":"grounded","anchor":"q1.group[EU].profile.mean","kind":"cell","claimed_value":9999}
+	],"reason":"判官误判全接地"}`)
+	e := NewAnswerGrounding(c)
+	res := TaskResult{Answer: "...", ToolCalls: []contract.ToolCall{
+		{Name: "analyze", Response: contract.Response{Status: contract.StatusOK,
+			Groups: []contract.GroupProfile{{Group: "EU", Profile: contract.DistProfile{Mean: 3000}}}}},
+	}}
+	sc, err := e.Evaluate(context.Background(), res, agSpecNode(t, "x", 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sc.Detail, "mismatch") || !strings.Contains(sc.Detail, "attribution_resolved_rate=0.00") {
+		t.Fatalf("应抓出 mismatch 且 rate=0.00:\n%s", sc.Detail)
 	}
 }
