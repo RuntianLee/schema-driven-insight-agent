@@ -14,6 +14,8 @@ fixture:
         - {count: 20,  values: {Geography: Spain,    Balance: 200000, Exited: 1}}
         - {count: 100, values: {Geography: France,  Balance: 50000,  Exited: 0}}
 evaluators:
+  attribution_grounding: {}
+  claim_coverage: {}
   data_correctness:
     tool: analyze
     expect_status: OK
@@ -30,6 +32,3 @@ evaluators:
   insight_novelty:
     rubric: "是否点出复合口径需拆分组/过滤/派生为独立单步、避免维度污染？"
     min_score: 3
-  answer_grounding:
-    rubric: "逐个检查定量主张是否接地：逐字出现在 qN 结果、或可由结果合法派生（如 30+50+20=100）、或来自问题给定阈值，均判 grounded；找不到也无法派生判 ungrounded。score=5 全接地；每个未接地主张显著扣分；score=1 多数悬空。"
-    min_score: 4

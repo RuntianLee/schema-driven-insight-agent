@@ -13,6 +13,8 @@ fixture:
         - {count: 12, values: {CreditScore: 550, Exited: 0}}
         - {count: 70, values: {CreditScore: 700, Exited: 0}}
 evaluators:
+  attribution_grounding: {}
+  claim_coverage: {}
   data_correctness:
     tool: analyze
     expect_status: OK
@@ -27,6 +29,3 @@ evaluators:
   insight_novelty:
     rubric: "是否点明阈值边界口径（取值/开闭/方向）？"
     min_score: 3
-  answer_grounding:
-    rubric: "逐个检查定量主张是否接地：逐字出现在 qN 结果、或合法派生（18/30=60%、18+12=30）、或问题给定阈值（600），判 grounded；否则 ungrounded。score=5 全接地；每个未接地主张显著扣分；score=1 多数悬空。"
-    min_score: 4

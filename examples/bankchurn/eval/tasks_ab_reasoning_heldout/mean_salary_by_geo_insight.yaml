@@ -14,6 +14,8 @@ fixture:
         - {count: 100, values: {Geography: Germany, EstimatedSalary: 100000}}
         - {count: 100, values: {Geography: Spain,    EstimatedSalary: 100000}}
 evaluators:
+  attribution_grounding: {}
+  claim_coverage: {}
   data_correctness:
     tool: analyze
     expect_status: OK
@@ -30,6 +32,3 @@ evaluators:
   insight_novelty:
     rubric: "是否点出相等均值可能掩盖不同分布、需看离散度？"
     min_score: 3
-  answer_grounding:
-    rubric: "逐个检查定量主张是否接地：逐字出现在 qN 结果判 grounded；结果中找不到也无法派生判 ungrounded（尤其注意不得编造各地域具体分位/离散数值，结果里没有）。score=5 全接地；每个未接地主张显著扣分；score=1 多数悬空。"
-    min_score: 4
