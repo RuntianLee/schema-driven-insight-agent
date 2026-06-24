@@ -15,8 +15,8 @@ import (
 
 func TestParseAnswerGroundingReply_FullLedger(t *testing.T) {
 	raw := "```json\n" + `{"score":4,"claims":[
-		{"claim":"次日流失42%","status":"grounded","evidence":"q2.churn_d1=0.42"},
-		{"claim":"ARPU 12.5","status":"ungrounded","evidence":"q1..q3 无此值"}
+		{"claim":"次日流失42%","status":"grounded","anchor":"q2.churn_d1","kind":"cell","claimed_value":0.42},
+		{"claim":"ARPU 12.5","status":"ungrounded","anchor":"","kind":"cell","claimed_value":12.5}
 	],"reason":"一处悬空"}` + "\n```"
 	got, err := parseAnswerGroundingReply(raw)
 	if err != nil {
@@ -27,6 +27,9 @@ func TestParseAnswerGroundingReply_FullLedger(t *testing.T) {
 	}
 	if got.Claims[1].Status != "ungrounded" || got.Claims[1].Claim != "ARPU 12.5" {
 		t.Fatalf("第二条主张解析错: %+v", got.Claims[1])
+	}
+	if got.Claims[0].Anchor != "q2.churn_d1" || got.Claims[0].ClaimedValue != 0.42 {
+		t.Fatalf("结构化锚解析错: %+v", got.Claims[0])
 	}
 }
 
@@ -60,7 +63,7 @@ func TestAnswerGrounding_NameAndKind(t *testing.T) {
 }
 
 func TestAnswerGrounding_BelowMin(t *testing.T) {
-	c := constJudge(`{"score":2,"claims":[{"claim":"ARPU 12.5","status":"ungrounded","evidence":"无"}],"reason":"悬空"}`)
+	c := constJudge(`{"score":2,"claims":[{"claim":"ARPU 12.5","status":"ungrounded","anchor":"","kind":"cell","claimed_value":12.5}],"reason":"悬空"}`)
 	e := NewAnswerGrounding(c)
 	res := TaskResult{Answer: "ARPU 12.5", ToolCalls: []contract.ToolCall{{Name: "analyze"}}}
 	sc, err := e.Evaluate(context.Background(), res, agSpecNode(t, "x", 4))
@@ -165,5 +168,108 @@ func TestAnswerGrounding_RealLLM_Discriminates(t *testing.T) {
 	t.Logf("负样本: %s | %s", scNeg.Display, scNeg.Detail)
 	if !scNeg.BelowMin || !strings.Contains(scNeg.Detail, "12.5") {
 		t.Fatalf("负样本（凭空 12.5）应 BelowMin 且 Detail 点名 12.5: %+v", scNeg)
+	}
+}
+
+func TestAnswerGrounding_DeterministicLedger(t *testing.T) {
+	c := constJudge(`{"score":3,"claims":[
+		{"claim":"EU 人均 3000","status":"grounded","anchor":"q1.group[EU].profile.mean","kind":"cell","claimed_value":3000},
+		{"claim":"ARPU 12.5","status":"ungrounded","anchor":"","kind":"cell","claimed_value":12.5}
+	],"reason":"一处悬空"}`)
+	e := NewAnswerGrounding(c)
+	res := TaskResult{Answer: "...", ToolCalls: []contract.ToolCall{
+		{Name: "analyze", Response: contract.Response{Status: contract.StatusOK,
+			Groups: []contract.GroupProfile{{Group: "EU", Profile: contract.DistProfile{Mean: 3000}}}}},
+	}}
+	sc, err := e.Evaluate(context.Background(), res, agSpecNode(t, "x", 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"attribution_resolved_rate=0.50", "resolved", "unresolvable"} {
+		if !strings.Contains(sc.Detail, want) {
+			t.Fatalf("Detail 缺 %q:\n%s", want, sc.Detail)
+		}
+	}
+}
+
+func TestAnswerGrounding_CatchesJudgeOverLenientMismatch(t *testing.T) {
+	c := constJudge(`{"score":5,"claims":[
+		{"claim":"EU 人均 9999","status":"grounded","anchor":"q1.group[EU].profile.mean","kind":"cell","claimed_value":9999}
+	],"reason":"判官误判全接地"}`)
+	e := NewAnswerGrounding(c)
+	res := TaskResult{Answer: "...", ToolCalls: []contract.ToolCall{
+		{Name: "analyze", Response: contract.Response{Status: contract.StatusOK,
+			Groups: []contract.GroupProfile{{Group: "EU", Profile: contract.DistProfile{Mean: 3000}}}}},
+	}}
+	sc, err := e.Evaluate(context.Background(), res, agSpecNode(t, "x", 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sc.Detail, "mismatch") || !strings.Contains(sc.Detail, "attribution_resolved_rate=0.00") {
+		t.Fatalf("应抓出 mismatch 且 rate=0.00:\n%s", sc.Detail)
+	}
+}
+
+// TestAnswerGrounding_RealLLM_Attribution 是阶梯①冒烟：默认 skip，AG_SMOKE=1 才跑。
+// 验证升级后的判官在真 LLM 下：正样本派生量 resolver 判 resolved、rate 高；
+// 负样本凭空数 rate 跌（mismatch 或 unresolvable）。
+func TestAnswerGrounding_RealLLM_Attribution(t *testing.T) {
+	if os.Getenv("AG_SMOKE") != "1" {
+		t.Skip("AG_SMOKE!=1：跳过真 LLM 冒烟")
+	}
+	client, err := llm.ResolveStrict(os.Getenv("AG_CONFIG"))
+	if err != nil {
+		t.Fatalf("构造真 judge 失败（检查 AG_CONFIG / MINIMAX_API_KEY）: %v", err)
+	}
+	e := NewAnswerGrounding(client)
+	calls := []contract.ToolCall{{Name: "analyze", Response: contract.Response{
+		Status: contract.StatusOK,
+		Table: &contract.TableResult{
+			Columns:  []contract.ColumnMeta{{Name: "server_id"}, {Name: "avg_money"}},
+			Rows:     [][]any{{1, 2000.0}, {2, 8000.0}},
+			RowCount: 2,
+		},
+	}}}
+	rubric := "逐个检查回答里的定量主张是否接地：能溯源到某 qN 单元格、或由单元格合法派生（比例/倍数/差值/百分比）即 grounded；找不到也无法派生判 ungrounded。score=5 全接地；每个未接地显著扣分。"
+	spec := agSpecNode(t, rubric, 4)
+
+	pos := TaskResult{Answer: "1 服人均 2000，2 服人均 8000，2 服高出 4 倍。", ToolCalls: calls}
+	scPos, _ := e.Evaluate(context.Background(), pos, spec)
+	t.Logf("正样本: %s | %s", scPos.Display, scPos.Detail)
+	if !strings.Contains(scPos.Detail, "resolved") {
+		t.Fatalf("正样本应至少一条 resolved:\n%s", scPos.Detail)
+	}
+
+	neg := TaskResult{Answer: "1 服人均 2000，2 服人均 8000，ARPU 高达 12.5。", ToolCalls: calls}
+	scNeg, _ := e.Evaluate(context.Background(), neg, spec)
+	t.Logf("负样本: %s | %s", scNeg.Display, scNeg.Detail)
+	if strings.Contains(scNeg.Detail, "attribution_resolved_rate=1.00") {
+		t.Fatalf("负样本（凭空 12.5）rate 不应满分:\n%s", scNeg.Detail)
+	}
+}
+
+func TestAnswerGrounding_DerivedUnsupportedNotPenalizedAsHallucination(t *testing.T) {
+	// 判官给一个合法但未注册的派生算子锚（harmonic_mean 未注册）→ resolver 标 derived_unsupported
+	// （回退软评），不当作 mismatch 幻觉——守「不误伤合法派生量」。
+	c := constJudge(`{"score":4,"claims":[
+		{"claim":"EU/US 调和均值约 2000","status":"grounded","anchor":"harmonic_mean(q1.group[EU].profile.mean, q1.group[US].profile.mean)","kind":"derived","claimed_value":2000}
+	],"reason":"派生量"}`)
+	e := NewAnswerGrounding(c)
+	res := TaskResult{Answer: "...", ToolCalls: []contract.ToolCall{
+		{Name: "analyze", Response: contract.Response{Status: contract.StatusOK,
+			Groups: []contract.GroupProfile{
+				{Group: "EU", Profile: contract.DistProfile{Mean: 3000}},
+				{Group: "US", Profile: contract.DistProfile{Mean: 1500}},
+			}}},
+	}}
+	sc, err := e.Evaluate(context.Background(), res, agSpecNode(t, "x", 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sc.Detail, "derived_unsupported") {
+		t.Fatalf("应标 derived_unsupported:\n%s", sc.Detail)
+	}
+	if strings.Contains(sc.Detail, "mismatch") {
+		t.Fatalf("合法未注册派生量不应被判 mismatch:\n%s", sc.Detail)
 	}
 }
