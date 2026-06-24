@@ -247,3 +247,29 @@ func TestAnswerGrounding_RealLLM_Attribution(t *testing.T) {
 		t.Fatalf("负样本（凭空 12.5）rate 不应满分:\n%s", scNeg.Detail)
 	}
 }
+
+func TestAnswerGrounding_DerivedUnsupportedNotPenalizedAsHallucination(t *testing.T) {
+	// 判官给一个合法但未注册的派生算子锚（harmonic_mean 未注册）→ resolver 标 derived_unsupported
+	// （回退软评），不当作 mismatch 幻觉——守「不误伤合法派生量」。
+	c := constJudge(`{"score":4,"claims":[
+		{"claim":"EU/US 调和均值约 2000","status":"grounded","anchor":"harmonic_mean(q1.group[EU].profile.mean, q1.group[US].profile.mean)","kind":"derived","claimed_value":2000}
+	],"reason":"派生量"}`)
+	e := NewAnswerGrounding(c)
+	res := TaskResult{Answer: "...", ToolCalls: []contract.ToolCall{
+		{Name: "analyze", Response: contract.Response{Status: contract.StatusOK,
+			Groups: []contract.GroupProfile{
+				{Group: "EU", Profile: contract.DistProfile{Mean: 3000}},
+				{Group: "US", Profile: contract.DistProfile{Mean: 1500}},
+			}}},
+	}}
+	sc, err := e.Evaluate(context.Background(), res, agSpecNode(t, "x", 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sc.Detail, "derived_unsupported") {
+		t.Fatalf("应标 derived_unsupported:\n%s", sc.Detail)
+	}
+	if strings.Contains(sc.Detail, "mismatch") {
+		t.Fatalf("合法未注册派生量不应被判 mismatch:\n%s", sc.Detail)
+	}
+}
