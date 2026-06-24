@@ -209,3 +209,41 @@ func TestAnswerGrounding_CatchesJudgeOverLenientMismatch(t *testing.T) {
 		t.Fatalf("应抓出 mismatch 且 rate=0.00:\n%s", sc.Detail)
 	}
 }
+
+// TestAnswerGrounding_RealLLM_Attribution 是阶梯①冒烟：默认 skip，AG_SMOKE=1 才跑。
+// 验证升级后的判官在真 LLM 下：正样本派生量 resolver 判 resolved、rate 高；
+// 负样本凭空数 rate 跌（mismatch 或 unresolvable）。
+func TestAnswerGrounding_RealLLM_Attribution(t *testing.T) {
+	if os.Getenv("AG_SMOKE") != "1" {
+		t.Skip("AG_SMOKE!=1：跳过真 LLM 冒烟")
+	}
+	client, err := llm.ResolveStrict(os.Getenv("AG_CONFIG"))
+	if err != nil {
+		t.Fatalf("构造真 judge 失败（检查 AG_CONFIG / MINIMAX_API_KEY）: %v", err)
+	}
+	e := NewAnswerGrounding(client)
+	calls := []contract.ToolCall{{Name: "analyze", Response: contract.Response{
+		Status: contract.StatusOK,
+		Table: &contract.TableResult{
+			Columns:  []contract.ColumnMeta{{Name: "server_id"}, {Name: "avg_money"}},
+			Rows:     [][]any{{1, 2000.0}, {2, 8000.0}},
+			RowCount: 2,
+		},
+	}}}
+	rubric := "逐个检查回答里的定量主张是否接地：能溯源到某 qN 单元格、或由单元格合法派生（比例/倍数/差值/百分比）即 grounded；找不到也无法派生判 ungrounded。score=5 全接地；每个未接地显著扣分。"
+	spec := agSpecNode(t, rubric, 4)
+
+	pos := TaskResult{Answer: "1 服人均 2000，2 服人均 8000，2 服高出 4 倍。", ToolCalls: calls}
+	scPos, _ := e.Evaluate(context.Background(), pos, spec)
+	t.Logf("正样本: %s | %s", scPos.Display, scPos.Detail)
+	if !strings.Contains(scPos.Detail, "resolved") {
+		t.Fatalf("正样本应至少一条 resolved:\n%s", scPos.Detail)
+	}
+
+	neg := TaskResult{Answer: "1 服人均 2000，2 服人均 8000，ARPU 高达 12.5。", ToolCalls: calls}
+	scNeg, _ := e.Evaluate(context.Background(), neg, spec)
+	t.Logf("负样本: %s | %s", scNeg.Display, scNeg.Detail)
+	if strings.Contains(scNeg.Detail, "attribution_resolved_rate=1.00") {
+		t.Fatalf("负样本（凭空 12.5）rate 不应满分:\n%s", scNeg.Detail)
+	}
+}
