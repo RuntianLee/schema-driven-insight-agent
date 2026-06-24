@@ -19,9 +19,9 @@ type ABTaskDelta struct {
 	JudgeB    float64 `json:"judge_b"`
 	JudgeErrA int     `json:"judge_err_a"` // reasoning_quality Errored 次数（已排除出均值）
 	JudgeErrB int     `json:"judge_err_b"`
-	AgA       float64 `json:"ag_a"` // answer_grounding 均值（叙述忠实度，off-gate）
+	AgA       float64 `json:"ag_a"` // attribution_grounding 均值（确定性归因 gate，叙述忠实度=主张可溯源比例）
 	AgB       float64 `json:"ag_b"`
-	AgErrA    int     `json:"ag_err_a"` // answer_grounding Errored 次数（已排除出均值）
+	AgErrA    int     `json:"ag_err_a"` // attribution_grounding Errored 次数（已排除出均值；attribution_grounding 为确定性 evaluator，恒为 0，若将来换 LLM judge 则生效）
 	AgErrB    int     `json:"ag_err_b"`
 }
 
@@ -45,11 +45,11 @@ type ABReport struct {
 	Meets20PctJudge           bool          `json:"meets_20pct_judge"`
 	JudgeErrA                 int           `json:"judge_err_a"` // 全任务 reasoning_quality Errored 总数（A 配置）
 	JudgeErrB                 int           `json:"judge_err_b"` // 全任务 reasoning_quality Errored 总数（B 配置）
-	MeanAgA                   float64       `json:"mean_ag_a"`   // 全任务 answer_grounding 均值（A 配置）
+	MeanAgA                   float64       `json:"mean_ag_a"`   // 全任务 attribution_grounding 均值（A 配置；确定性归因 gate，叙述忠实度=主张可溯源比例）
 	MeanAgB                   float64       `json:"mean_ag_b"`
 	MeanAgDelta               float64       `json:"mean_ag_delta"`
-	AgErrA                    int           `json:"ag_err_a"` // 全任务 answer_grounding Errored 总数（A 配置）
-	AgErrB                    int           `json:"ag_err_b"` // 全任务 answer_grounding Errored 总数（B 配置）
+	AgErrA                    int           `json:"ag_err_a"` // 全任务 attribution_grounding Errored 总数（A 配置；attribution_grounding 为确定性 evaluator，恒为 0，若将来换 LLM judge 则生效）
+	AgErrB                    int           `json:"ag_err_b"` // 全任务 attribution_grounding Errored 总数（B 配置；同上，恒为 0）
 	ReflectionMode            string        `json:"reflection_mode,omitempty"`
 	MemoryEnabled             bool          `json:"memory_enabled"`
 	MemoryDBPath              string        `json:"memory_db_path,omitempty"`
@@ -69,7 +69,7 @@ type ABReport struct {
 
 const dcEval = "data_correctness"
 const rqEval = "reasoning_quality"
-const agEval = "answer_grounding"
+const agEval = "attribution_grounding"
 
 // BuildABReport 从两配置各 runs 次的 Report 聚合 A/B 增益。
 // aReports/bReports 长度均须 == runs；任务集取自第一份 A 报告（稳定顺序）。

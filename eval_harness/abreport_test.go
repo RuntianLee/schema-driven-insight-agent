@@ -30,14 +30,14 @@ func b2f(b bool) float64 {
 	return 0
 }
 
-// TestBuildABReport_AnswerGroundingAggregated 验证 AB 报告把 answer_grounding 作为
-// 第二个 judge 维度聚合（与 reasoning_quality 并列，off-gate）。
-func TestBuildABReport_AnswerGroundingAggregated(t *testing.T) {
+// TestBuildABReport_AttributionGroundingAggregated 验证 AB 报告把 attribution_grounding
+// 作为第二个 grounding 维度聚合（与 reasoning_quality 并列）。
+func TestBuildABReport_AttributionGroundingAggregated(t *testing.T) {
 	mk := func(agVal float64) *Report {
-		r := NewReport([]string{"data_correctness", "reasoning_quality", "answer_grounding"})
+		r := NewReport([]string{"data_correctness", "reasoning_quality", "attribution_grounding"})
 		r.Add("t", evaluators.Score{Evaluator: "data_correctness", Value: 1, Pass: true}, true)
 		r.Add("t", evaluators.Score{Evaluator: "reasoning_quality", Value: 0.6, Pass: false}, false)
-		r.Add("t", evaluators.Score{Evaluator: "answer_grounding", Value: agVal, Pass: false}, false)
+		r.Add("t", evaluators.Score{Evaluator: "attribution_grounding", Value: agVal, Pass: false}, false)
 		return r
 	}
 	a := []*Report{mk(0.8), mk(0.8)}
