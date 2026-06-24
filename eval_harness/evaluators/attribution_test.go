@@ -66,3 +66,39 @@ func TestResolve_Unresolvable(t *testing.T) {
 		}
 	}
 }
+
+func tableCalls() []contract.ToolCall {
+	return []contract.ToolCall{
+		{Name: "analyze", Response: contract.Response{
+			Status: contract.StatusOK,
+			Table: &contract.TableResult{
+				Columns:  []contract.ColumnMeta{{Name: "server_id"}, {Name: "avg_money"}},
+				Rows:     [][]any{{1, 2000.0}, {2, 8000.0}},
+				RowCount: 2,
+			},
+		}},
+	}
+}
+
+func TestResolve_TableCell(t *testing.T) {
+	calls := tableCalls()
+	got, err := Resolve(calls, "q1.table.row[1].avg_money")
+	if err != nil {
+		t.Fatalf("意外报错: %v", err)
+	}
+	if got != 8000.0 {
+		t.Fatalf("got %v want 8000", got)
+	}
+}
+
+func TestResolve_TableCell_Bad(t *testing.T) {
+	calls := tableCalls()
+	for _, path := range []string{
+		"q1.table.row[9].avg_money", // 行越界
+		"q1.table.row[0].nope",      // 列名不存在
+	} {
+		if _, err := Resolve(calls, path); err == nil {
+			t.Errorf("%s: 应报错", path)
+		}
+	}
+}

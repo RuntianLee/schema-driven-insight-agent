@@ -120,7 +120,40 @@ func toFloat(v any) (float64, bool) {
 	return f, ok
 }
 
-// navTableCell 在 Task 2 完整实现；此处先占位保证编译。
+// navTableCell 消费 row[i].<col> 两段：rows[i] 取行，columns 把列名映射到列下标。
 func navTableCell(m map[string]any, segs []string) (float64, error) {
-	return 0, fmt.Errorf("table 寻址尚未实现")
+	if len(segs) != 2 {
+		return 0, fmt.Errorf("table 寻址须为 row[i].<col>，得到 %v", segs)
+	}
+	sel := selectorRe.FindStringSubmatch(segs[0])
+	if sel == nil || sel[1] != "row" {
+		return 0, fmt.Errorf("table 首段须为 row[i]: %q", segs[0])
+	}
+	i, err := strconv.Atoi(sel[2])
+	if err != nil {
+		return 0, fmt.Errorf("行下标无效: %q", sel[2])
+	}
+	rows, _ := m["rows"].([]any)
+	if i < 0 || i >= len(rows) {
+		return 0, fmt.Errorf("行下标 %d 越界（共 %d 行）", i, len(rows))
+	}
+	row, ok := rows[i].([]any)
+	if !ok {
+		return 0, fmt.Errorf("第 %d 行非数组", i)
+	}
+	cols, _ := m["columns"].([]any)
+	col := segs[1]
+	for ci, c := range cols {
+		cm, ok := c.(map[string]any)
+		if ok && fmt.Sprint(cm["name"]) == col {
+			if ci >= len(row) {
+				return 0, fmt.Errorf("列 %q 下标 %d 超出行宽", col, ci)
+			}
+			if f, ok := toFloat(row[ci]); ok {
+				return f, nil
+			}
+			return 0, fmt.Errorf("单元格 [%d][%s] 非数值: %v", i, col, row[ci])
+		}
+	}
+	return 0, fmt.Errorf("列 %q 不存在", col)
 }
