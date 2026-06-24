@@ -1,6 +1,8 @@
 package evaluators
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
@@ -99,6 +101,62 @@ func TestResolve_TableCell_Bad(t *testing.T) {
 	} {
 		if _, err := Resolve(calls, path); err == nil {
 			t.Errorf("%s: 应报错", path)
+		}
+	}
+}
+
+func TestResolveAnchor_Derived(t *testing.T) {
+	calls := twoGroupCalls() // q2.group[EU].mean=3000, q2.group[US].mean=1500
+	cases := []struct {
+		anchor string
+		want   float64
+	}{
+		{"ratio(q2.group[EU].profile.mean, q2.group[US].profile.mean)", 2.0},
+		{"diff(q2.group[EU].profile.mean, q2.group[US].profile.mean)", 1500},
+		{"pct_change(q2.group[EU].profile.mean, q2.group[US].profile.mean)", 1.0},
+		{"pct_points(q2.group[EU].profile.mean, q2.group[US].profile.mean)", 1500},
+		{"sum(q2.group[EU].profile.count, q2.group[US].profile.count)", 1000},
+	}
+	for _, c := range cases {
+		got, err := ResolveAnchor(calls, c.anchor)
+		if err != nil {
+			t.Errorf("%s: 意外报错 %v", c.anchor, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: got %v want %v", c.anchor, got, c.want)
+		}
+	}
+}
+
+func TestResolveAnchor_UnsupportedOp(t *testing.T) {
+	calls := twoGroupCalls()
+	_, err := ResolveAnchor(calls, "harmonic_mean(q1.profile.mean, q1.profile.median)")
+	if !errors.Is(err, errUnsupportedOp) {
+		t.Fatalf("未注册算子应返回 errUnsupportedOp，得到 %v", err)
+	}
+}
+
+func TestResolveAnchor_OperandUnresolvable(t *testing.T) {
+	calls := twoGroupCalls()
+	if _, err := ResolveAnchor(calls, "ratio(q2.group[ZZ].profile.mean, q1.profile.mean)"); err == nil {
+		t.Fatal("操作数不可解析应报错")
+	}
+}
+
+func TestResolveAnchor_PlainCell(t *testing.T) {
+	calls := twoGroupCalls()
+	got, err := ResolveAnchor(calls, "q1.profile.median") // 非派生式 → 当单元格路径
+	if err != nil || got != 1800 {
+		t.Fatalf("普通路径派发失败: got %v err %v", got, err)
+	}
+}
+
+func TestOpCatalog_ListsOps(t *testing.T) {
+	cat := OpCatalog()
+	for _, name := range []string{"ratio", "diff", "pct_change", "pct_points", "sum"} {
+		if !strings.Contains(cat, name) {
+			t.Errorf("算子小抄缺 %q:\n%s", name, cat)
 		}
 	}
 }

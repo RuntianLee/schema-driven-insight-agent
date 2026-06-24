@@ -3,8 +3,10 @@ package evaluators
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -156,4 +158,107 @@ func navTableCell(m map[string]any, segs []string) (float64, error) {
 		}
 	}
 	return 0, fmt.Errorf("列 %q 不存在", col)
+}
+
+var errUnsupportedOp = errors.New("派生算子未注册")
+
+// DerivOp 是一个派生算子：纯函数 + arity 声明 + 喂判官的一句话语义。
+// Arity = -1 表示变长（≥1）。
+type DerivOp struct {
+	Name  string
+	Arity int
+	Apply func([]float64) (float64, error)
+	Doc   string
+}
+
+var derivOps = map[string]DerivOp{}
+
+// RegisterOp 注册一个派生算子（单一真值源：判官小抄由此自动生成）。
+func RegisterOp(op DerivOp) { derivOps[op.Name] = op }
+
+func init() {
+	RegisterOp(DerivOp{Name: "ratio", Arity: 2, Doc: "a/b 倍数", Apply: func(v []float64) (float64, error) { return divide(v[0], v[1]) }})
+	RegisterOp(DerivOp{Name: "pct", Arity: 2, Doc: "a/b 占比", Apply: func(v []float64) (float64, error) { return divide(v[0], v[1]) }})
+	RegisterOp(DerivOp{Name: "diff", Arity: 2, Doc: "a−b 绝对差", Apply: func(v []float64) (float64, error) { return v[0] - v[1], nil }})
+	RegisterOp(DerivOp{Name: "pct_points", Arity: 2, Doc: "a−b 两百分比相减（百分点）", Apply: func(v []float64) (float64, error) { return v[0] - v[1], nil }})
+	RegisterOp(DerivOp{Name: "spread", Arity: 2, Doc: "a−b 分位/离散度差", Apply: func(v []float64) (float64, error) { return v[0] - v[1], nil }})
+	RegisterOp(DerivOp{Name: "pct_change", Arity: 2, Doc: "(a−b)/b 相对变化", Apply: func(v []float64) (float64, error) {
+		d, err := divide(v[0]-v[1], v[1])
+		return d, err
+	}})
+	RegisterOp(DerivOp{Name: "sum", Arity: -1, Doc: "求和（变长）", Apply: func(v []float64) (float64, error) {
+		var s float64
+		for _, x := range v {
+			s += x
+		}
+		return s, nil
+	}})
+}
+
+func divide(a, b float64) (float64, error) {
+	if b == 0 {
+		return 0, fmt.Errorf("除零")
+	}
+	return a / b, nil
+}
+
+// derivRe 匹配派生式 name(args)；args 内为逗号分隔的单元格路径（Phase 1 不支持嵌套括号）。
+var derivRe = regexp.MustCompile(`^([a-zA-Z_]+)\((.*)\)$`)
+
+// ResolveAnchor 派发：派生式 name(...) → 解析操作数 + 应用算子；否则当单元格路径走 Resolve。
+func ResolveAnchor(calls []contract.ToolCall, anchor string) (float64, error) {
+	m := derivRe.FindStringSubmatch(strings.TrimSpace(anchor))
+	if m == nil {
+		return Resolve(calls, anchor)
+	}
+	op, ok := derivOps[m[1]]
+	if !ok {
+		return 0, fmt.Errorf("%w: %s", errUnsupportedOp, m[1])
+	}
+	args := splitArgs(m[2])
+	if op.Arity >= 0 && len(args) != op.Arity {
+		return 0, fmt.Errorf("算子 %s 需 %d 个操作数，得到 %d", op.Name, op.Arity, len(args))
+	}
+	if op.Arity == -1 && len(args) == 0 {
+		return 0, fmt.Errorf("算子 %s 需至少 1 个操作数", op.Name)
+	}
+	vals := make([]float64, len(args))
+	for i, a := range args {
+		v, err := Resolve(calls, strings.TrimSpace(a))
+		if err != nil {
+			return 0, fmt.Errorf("操作数 %q 不可解析: %w", a, err)
+		}
+		vals[i] = v
+	}
+	return op.Apply(vals)
+}
+
+// splitArgs 按顶层逗号切分（Phase 1 操作数是无嵌套括号的路径，简单切分即可）。
+func splitArgs(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, strings.TrimSpace(p))
+	}
+	return out
+}
+
+// OpCatalog 从注册表生成判官小抄（名字稳定排序，便于 prompt 复现）。
+func OpCatalog() string {
+	names := make([]string, 0, len(derivOps))
+	for n := range derivOps {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for i, n := range names {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		fmt.Fprintf(&b, "%s=%s", n, derivOps[n].Doc)
+	}
+	return b.String()
 }
