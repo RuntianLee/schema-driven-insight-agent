@@ -20,6 +20,8 @@ type TaskResult struct {
 	RunErr    error
 	// Advisory 是 Analyst→Advisor 流水线产出的建议草案；nil = 本任务未跑 Advisor。
 	Advisory *contract.AdvisoryDraft
+	// AttributionClaims 是 Analyst 自产归因块；nil 表示未输出（向后兼容，gate 自动 skip）。
+	AttributionClaims []contract.ClaimAnchor
 }
 
 // Score 是单个 evaluator 对单个任务的评分。
