@@ -1,0 +1,36 @@
+# held-out · mean —— 各地域人均信用分；均值近持平，勿过度解读，须看离散度。
+id: mean_creditscore_by_geo_insight
+title: "各地域人均信用分（held-out）"
+question: "各地域(Geography)客户的人均信用分(CreditScore)是多少？哪个地域信用质量更优，运营含义？"
+llm_turns:
+  - '{"tool":"analyze","args":{"table":"customers","group_by":["Geography"],"aggregates":[{"fn":"avg","column":"CreditScore","as":"avg_cs"}],"order_by":[{"key":"Geography"}]}}'
+  - "三地域人均信用分几乎持平（法 650、德 651、西 651），差异 1 分内、不具实质意义。均值近似时不应据此排序信用质量，应看分布/离散度（如低分段占比），单看人均会过度解读噪声。"
+fixture:
+  tables:
+    customers:
+      groups:
+        - {count: 50, values: {Geography: France,  CreditScore: 600}}
+        - {count: 50, values: {Geography: France,  CreditScore: 700}}
+        - {count: 100, values: {Geography: Germany, CreditScore: 651}}
+        - {count: 50, values: {Geography: Spain,    CreditScore: 602}}
+        - {count: 50, values: {Geography: Spain,    CreditScore: 700}}
+evaluators:
+  data_correctness:
+    tool: analyze
+    expect_status: OK
+    table:
+      - match: {Geography: France}
+        expect_pos: {1: 650}
+      - match: {Geography: Germany}
+        expect_pos: {1: 651}
+      - match: {Geography: Spain}
+        expect_pos: {1: 651}
+  reasoning_quality:
+    rubric: "按 5 项打分（满分 5）：(1)正确给出各地域人均信用分；(2)指出三者差异极小（1 分内）；(3)明确不应据近似均值排序信用质量、避免过度解读噪声；(4)给出具体分布判断——应看低分段占比/离散度而非只看均值；(5)据此给审慎结论（信用质量无显著地域差，勿据此差异化授信）。"
+    min_score: 5
+  insight_novelty:
+    rubric: "是否点出均值近似时需看分布/勿过度解读？"
+    min_score: 3
+  answer_grounding:
+    rubric: "逐个检查定量主张是否接地：逐字出现在 qN 结果或可由结果合法派生（如差值 1）判 grounded；找不到也无法派生判 ungrounded。score=5 全接地；每个未接地主张显著扣分；score=1 多数悬空。"
+    min_score: 4

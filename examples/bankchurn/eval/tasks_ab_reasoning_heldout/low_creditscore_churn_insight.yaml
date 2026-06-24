@@ -1,0 +1,32 @@
+# held-out · threshold —— 信用分 <600（严格小于，边界方向与 train 相反）+ 流失率。
+id: low_creditscore_churn_insight
+title: "低信用分客户规模与流失（held-out）"
+question: "信用分低于 600 的客户有多少？其流失率如何，运营含义？"
+llm_turns:
+  - '{"tool":"analyze","args":{"table":"customers","filters":[{"field":"CreditScore","op":"<","value":600}],"group_by":["Exited"],"aggregates":[{"fn":"count","as":"n"}],"order_by":[{"key":"Exited"}]}}'
+  - "信用分严格小于 600 的客户共 30 人（边界：<600，不含等于）。其中 18 人已流失、12 人留存，流失率 60%。低信用分客群流失偏高，建议结合风险评估决定挽留力度。"
+fixture:
+  tables:
+    customers:
+      groups:
+        - {count: 18, values: {CreditScore: 550, Exited: 1}}
+        - {count: 12, values: {CreditScore: 550, Exited: 0}}
+        - {count: 70, values: {CreditScore: 700, Exited: 0}}
+evaluators:
+  data_correctness:
+    tool: analyze
+    expect_status: OK
+    table:
+      - match: {Exited: "0"}
+        expect_pos: {1: 12}
+      - match: {Exited: "1"}
+        expect_pos: {1: 18}
+  reasoning_quality:
+    rubric: "按 5 项打分（满分 5）：(1)正确给出低信用分客户数（30）及流失/留存拆分（18/12）；(2)算出流失率 60%；(3)明确点明边界定义——信用分『严格小于 600』、开闭方向、口径可复现；(4)指出低信用分客群流失偏高；(5)给出结合风险评估的差异化挽留建议。"
+    min_score: 5
+  insight_novelty:
+    rubric: "是否点明阈值边界口径（取值/开闭/方向）？"
+    min_score: 3
+  answer_grounding:
+    rubric: "逐个检查定量主张是否接地：逐字出现在 qN 结果、或合法派生（18/30=60%、18+12=30）、或问题给定阈值（600），判 grounded；否则 ungrounded。score=5 全接地；每个未接地主张显著扣分；score=1 多数悬空。"
+    min_score: 4

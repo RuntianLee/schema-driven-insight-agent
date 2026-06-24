@@ -1,0 +1,35 @@
+# train · composite —— 高余额(>150k)且流失 在各地域分布；过滤群体 + 分组维度拆步。
+id: high_balance_churn_by_geo_insight
+title: "高余额流失客户的地域分布（train）"
+question: "高余额(>150k)且已流失(Exited=1)的客户在各地域(Geography)如何分布？运营含义是什么？"
+llm_turns:
+  - '{"tool":"analyze","args":{"table":"customers","filters":[{"field":"Balance","op":">","value":150000},{"field":"Exited","op":"=","value":1}],"group_by":["Geography"],"aggregates":[{"fn":"count","as":"n"}],"order_by":[{"key":"Geography"}]}}'
+  - "高余额且已流失客户共 100 人：德国 50、法国 30、西班牙 20。先按过滤群体（Balance>150k 且 Exited=1）锁定，再按地域分组——德国高净值流失最集中，应优先在德国排查高净值客户体验并定向挽留。"
+fixture:
+  tables:
+    customers:
+      groups:
+        - {count: 30,  values: {Geography: France,  Balance: 200000, Exited: 1}}
+        - {count: 50,  values: {Geography: Germany, Balance: 200000, Exited: 1}}
+        - {count: 20,  values: {Geography: Spain,    Balance: 200000, Exited: 1}}
+        - {count: 100, values: {Geography: France,  Balance: 50000,  Exited: 0}}
+evaluators:
+  data_correctness:
+    tool: analyze
+    expect_status: OK
+    table:
+      - match: {Geography: France}
+        expect_pos: {1: 30}
+      - match: {Geography: Germany}
+        expect_pos: {1: 50}
+      - match: {Geography: Spain}
+        expect_pos: {1: 20}
+  reasoning_quality:
+    rubric: "按 5 项打分（满分 5）：(1)正确给出各地域高余额流失客户数（德 50/法 30/西 20）；(2)指出德国最集中并量化；(3)明确把口径拆成可验证单步——先定义过滤群体（Balance>150k 且 Exited=1）、再按地域分组，说明二者独立避免相互污染；(4)指出仅看单一维度会掩盖结构（如不拆分组会漏掉地域集中度）；(5)给出按地域差异化的挽留/排查建议。"
+    min_score: 5
+  insight_novelty:
+    rubric: "是否点出复合口径需拆分组/过滤/派生为独立单步、避免维度污染？"
+    min_score: 3
+  answer_grounding:
+    rubric: "逐个检查定量主张是否接地：逐字出现在 qN 结果、或可由结果合法派生（如 30+50+20=100）、或来自问题给定阈值，均判 grounded；找不到也无法派生判 ungrounded。score=5 全接地；每个未接地主张显著扣分；score=1 多数悬空。"
+    min_score: 4

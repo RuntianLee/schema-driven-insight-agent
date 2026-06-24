@@ -1,0 +1,36 @@
+# train · mean —— 各地域人均余额；零余额群体把法/西均值拉低（真实数据彩蛋，扭曲朝下）。
+id: mean_balance_by_geo_insight
+title: "各地域人均账户余额 + 运营含义（train）"
+question: "各地域(Geography)客户的人均账户余额(Balance)是多少？哪个地域客户更有价值，这对运营意味着什么？"
+llm_turns:
+  - '{"tool":"analyze","args":{"table":"customers","group_by":["Geography"],"aggregates":[{"fn":"avg","column":"Balance","as":"avg_balance"}],"order_by":[{"key":"Geography"}]}}'
+  - "德国人均余额 120000，约为法国/西班牙（均 60000）的两倍。但法/西各有一半客户余额为 0 把均值拉低，德国无零余额客户——差异主要来自零余额客户占比而非客户更富。应看 Balance=0 占比与中位数，不能只凭均值判定德国客户更有价值。"
+fixture:
+  tables:
+    customers:
+      groups:
+        - {count: 50, values: {Geography: France,  Balance: 0}}
+        - {count: 50, values: {Geography: France,  Balance: 120000}}
+        - {count: 100, values: {Geography: Germany, Balance: 120000}}
+        - {count: 50, values: {Geography: Spain,    Balance: 0}}
+        - {count: 50, values: {Geography: Spain,    Balance: 120000}}
+evaluators:
+  data_correctness:
+    tool: analyze
+    expect_status: OK
+    table:
+      - match: {Geography: France}
+        expect_pos: {1: 60000}
+      - match: {Geography: Germany}
+        expect_pos: {1: 120000}
+      - match: {Geography: Spain}
+        expect_pos: {1: 60000}
+  reasoning_quality:
+    rubric: "按 5 项打分（每满足 1 项得 1 分，满分 5）：(1)正确给出各地域人均余额并指出德国最高；(2)量化差距（约 2 倍/差额）；(3)明确指出法/西约半数客户余额为 0 把均值拉低、德国无零余额——差异源于零余额占比而非客户更富（不能只比均值就下『德国客户更有价值』结论）；(4)给出具体分布判断而非笼统『看分布』——如应看 Balance=0 占比、用中位数/条件均值；(5)据此给差异化运营建议（如先查法/西零余额客户为何不存款，而非单纯认定德国更优质）。"
+    min_score: 5
+  insight_novelty:
+    rubric: "是否点出零余额群体拉低均值、需看分布而非只看均值？"
+    min_score: 3
+  answer_grounding:
+    rubric: "逐个检查回答里的定量主张（数字/阈值/比较/比例）是否接地：逐字出现在某 qN 结果、或可由结果单元格合法派生（比例/倍数/差值）、或四舍五入一致、或来自问题给定阈值，均判 grounded；结果中找不到也无法派生判 ungrounded。score=5 全部接地；每出现一个未接地主张显著扣分，核心结论编造扣更重；score=1 多数定量主张悬空。"
+    min_score: 4
