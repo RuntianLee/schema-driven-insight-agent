@@ -160,3 +160,49 @@ func TestOpCatalog_ListsOps(t *testing.T) {
 		}
 	}
 }
+
+func TestEvalAnchor_Statuses(t *testing.T) {
+	calls := twoGroupCalls()
+	cases := []struct {
+		anchor  string
+		claimed float64
+		want    AttrStatus
+	}{
+		{"q2.group[EU].profile.mean", 3000, AttrResolved},
+		{"q2.group[EU].profile.mean", 9999, AttrMismatch},
+		{"ratio(q2.group[EU].profile.mean, q2.group[US].profile.mean)", 2.0, AttrResolved},
+		{"q2.group[ZZ].profile.mean", 1, AttrUnresolvable},
+		{"harmonic_mean(q1.profile.mean, q1.profile.median)", 1, AttrDerivUnsupported},
+		{"", 1, AttrUnresolvable},
+	}
+	for _, c := range cases {
+		v := EvalAnchor(calls, c.anchor, c.claimed, defaultAttrTol)
+		if v.Status != c.want {
+			t.Errorf("anchor=%q claimed=%v: got %s want %s", c.anchor, c.claimed, v.Status, c.want)
+		}
+	}
+}
+
+func TestEvalAnchor_ToleranceAndZero(t *testing.T) {
+	calls := twoGroupCalls() // q2.group[EU].mean=3000
+	if v := EvalAnchor(calls, "q2.group[EU].profile.mean", 2985, defaultAttrTol); v.Status != AttrResolved {
+		t.Fatalf("2985 应在容差内 resolved，得到 %s", v.Status)
+	}
+	zeroCalls := []contract.ToolCall{{Response: contract.Response{Profile: &contract.DistProfile{Mean: 0}}}}
+	if v := EvalAnchor(zeroCalls, "q1.profile.mean", 0, defaultAttrTol); v.Status != AttrResolved {
+		t.Fatalf("0≈0 应 resolved，得到 %s", v.Status)
+	}
+}
+
+func TestAttributionRate(t *testing.T) {
+	vs := []AttributionVerdict{
+		{Status: AttrResolved}, {Status: AttrResolved},
+		{Status: AttrMismatch}, {Status: AttrUnresolvable},
+	}
+	if got := AttributionRate(vs); got != 0.5 {
+		t.Fatalf("rate got %v want 0.5", got)
+	}
+	if got := AttributionRate(nil); got != 0 {
+		t.Fatalf("空集 rate 应为 0，得到 %v", got)
+	}
+}

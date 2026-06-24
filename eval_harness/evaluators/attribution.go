@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -244,6 +245,74 @@ func splitArgs(s string) []string {
 		out = append(out, strings.TrimSpace(p))
 	}
 	return out
+}
+
+// defaultAttrTol 是默认相对容差（吸收 narrative 四舍五入）。
+const defaultAttrTol = 0.01
+
+// AttrStatus 是单条主张的确定性裁决。
+type AttrStatus string
+
+const (
+	AttrResolved         AttrStatus = "resolved"            // 锚解析通 + 值匹配
+	AttrMismatch         AttrStatus = "mismatch"            // 解析通但值不符（疑似幻觉）
+	AttrUnresolvable     AttrStatus = "unresolvable"        // 锚解析不出（含空锚 / 判官提错锚）
+	AttrDerivUnsupported AttrStatus = "derived_unsupported" // 真派生但算子未注册 → 回退判官软评
+)
+
+// AttributionVerdict 是 resolver 对单条主张的裁决记录。
+type AttributionVerdict struct {
+	Anchor   string
+	Status   AttrStatus
+	Resolved float64 // 仅 resolved/mismatch 有意义
+	Claimed  float64
+}
+
+// EvalAnchor 解析锚并与判官读到的数值（claimed）按相对容差比对，给出确定性裁决。
+func EvalAnchor(calls []contract.ToolCall, anchor string, claimed, relTol float64) AttributionVerdict {
+	v := AttributionVerdict{Anchor: anchor, Claimed: claimed}
+	if strings.TrimSpace(anchor) == "" {
+		v.Status = AttrUnresolvable
+		return v
+	}
+	val, err := ResolveAnchor(calls, anchor)
+	if err != nil {
+		if errors.Is(err, errUnsupportedOp) {
+			v.Status = AttrDerivUnsupported
+		} else {
+			v.Status = AttrUnresolvable
+		}
+		return v
+	}
+	v.Resolved = val
+	if relClose(val, claimed, relTol) {
+		v.Status = AttrResolved
+	} else {
+		v.Status = AttrMismatch
+	}
+	return v
+}
+
+// relClose: claimed≈0 时退化为绝对容差，避免除零。
+func relClose(got, want, relTol float64) bool {
+	if math.Abs(want) < 1e-9 {
+		return math.Abs(got) < 1e-9
+	}
+	return math.Abs(got-want)/math.Abs(want) <= relTol
+}
+
+// AttributionRate = resolved 数 / 总主张数；空集为 0。
+func AttributionRate(vs []AttributionVerdict) float64 {
+	if len(vs) == 0 {
+		return 0
+	}
+	var n int
+	for _, v := range vs {
+		if v.Status == AttrResolved {
+			n++
+		}
+	}
+	return float64(n) / float64(len(vs))
 }
 
 // OpCatalog 从注册表生成判官小抄（名字稳定排序，便于 prompt 复现）。
