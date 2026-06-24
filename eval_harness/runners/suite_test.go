@@ -171,6 +171,60 @@ func mustEvalNodes(t *testing.T, m map[string]string) map[string]yaml.Node {
 	return out
 }
 
+func TestParseAttributionOutput(t *testing.T) {
+	tests := []struct {
+		name          string
+		raw           string
+		wantNilClaims bool
+		wantAnswer    string
+		wantNClaims   int
+	}{
+		{
+			name:          "无归因块 → nil + 原文",
+			raw:           "直接给出自然语言结论。",
+			wantNilClaims: true,
+			wantAnswer:    "直接给出自然语言结论。",
+		},
+		{
+			name: "归因块在叙述前 → 正确拆分",
+			raw: `{"attribution":[{"claim":"流失率 60%","anchor":"q1.profile.mean","kind":"cell","claimed_value":0.6}]}
+余额超过 150000 的客户共 20 人，流失率 60%。`,
+			wantNClaims: 1,
+			wantAnswer:  "余额超过 150000 的客户共 20 人，流失率 60%。",
+		},
+		{
+			name: "JSON 格式错 → nil + 原文",
+			raw: `{"attribution": INVALID_JSON}
+叙述。`,
+			wantNilClaims: true,
+			wantAnswer: `{"attribution": INVALID_JSON}
+叙述。`,
+		},
+		{
+			name: "attribution 数组为空 → nil + 原文",
+			raw: `{"attribution":[]}
+叙述文本。`,
+			wantNilClaims: true,
+			wantAnswer: `{"attribution":[]}
+叙述文本。`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			claims, answer := parseAttributionOutput(tt.raw)
+			if tt.wantNilClaims && claims != nil {
+				t.Errorf("期望 nil claims，got %v", claims)
+			}
+			if !tt.wantNilClaims && len(claims) != tt.wantNClaims {
+				t.Errorf("claims 数量: got %d, want %d", len(claims), tt.wantNClaims)
+			}
+			if answer != tt.wantAnswer {
+				t.Errorf("answer mismatch:\ngot:  %q\nwant: %q", answer, tt.wantAnswer)
+			}
+		})
+	}
+}
+
 // suiteFixtureDB 构建内存 SQLite player_basics：level 20×150, 50×90, 95×10（共 250）。
 func suiteFixtureDB(t *testing.T) *sql.DB {
 	t.Helper()
