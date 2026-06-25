@@ -102,3 +102,12 @@ type Response struct {
 	SchemaPath string         `json:"schema_path,omitempty"`
 	Detail     map[string]any `json:"detail,omitempty"`
 }
+
+// ClaimAnchor 是 Analyst 对单个定量主张的自产接地声明。
+// Anchor 语法复用 Phase 1 单元格路径/派生式（evaluators.ResolveAnchor 直接消费）。
+type ClaimAnchor struct {
+	Claim        string  `json:"claim"`         // 原文定量主张片段
+	Anchor       string  `json:"anchor"`        // 路径或派生式；找不到出处留空
+	Kind         string  `json:"kind"`          // "cell" | "derived"
+	ClaimedValue float64 `json:"claimed_value"` // 从主张读到的数值（量纲与 anchor 一致）
+}

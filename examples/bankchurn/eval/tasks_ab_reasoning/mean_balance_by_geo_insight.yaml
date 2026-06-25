@@ -15,6 +15,8 @@ fixture:
         - {count: 50, values: {Geography: Spain,    Balance: 0}}
         - {count: 50, values: {Geography: Spain,    Balance: 120000}}
 evaluators:
+  attribution_grounding: {}
+  claim_coverage: {}
   data_correctness:
     tool: analyze
     expect_status: OK
@@ -31,6 +33,3 @@ evaluators:
   insight_novelty:
     rubric: "是否点出零余额群体拉低均值、需看分布而非只看均值？"
     min_score: 3
-  answer_grounding:
-    rubric: "逐个检查回答里的定量主张（数字/阈值/比较/比例）是否接地：逐字出现在某 qN 结果、或可由结果单元格合法派生（比例/倍数/差值）、或四舍五入一致、或来自问题给定阈值，均判 grounded；结果中找不到也无法派生判 ungrounded。score=5 全部接地；每出现一个未接地主张显著扣分，核心结论编造扣更重；score=1 多数定量主张悬空。"
-    min_score: 4

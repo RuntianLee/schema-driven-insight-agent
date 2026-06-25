@@ -5,8 +5,10 @@ package runners
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/advisor"
@@ -79,15 +81,17 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		}
 		runner := eino_agent.New(agentClient, cfg.Dispatcher, opener, cfg.SchemaCtx)
 		runQuestion := applyReflection(ctx, cfg.ReflectionProvider, task.ID, task.Question)
-		answer, runErr := runner.Run(ctx, runQuestion)
+		rawAnswer, runErr := runner.Run(ctx, runQuestion)
+		claims, answer := parseAttributionOutput(rawAnswer)
 
 		res := evaluators.TaskResult{
-			TaskID:    task.ID,
-			Question:  task.Question,
-			Answer:    answer,
-			Outcome:   capture.Outcome(),
-			ToolCalls: capture.ToolCalls(),
-			RunErr:    runErr,
+			TaskID:            task.ID,
+			Question:          task.Question,
+			Answer:            answer,
+			Outcome:           capture.Outcome(),
+			ToolCalls:         capture.ToolCalls(),
+			RunErr:            runErr,
+			AttributionClaims: claims,
 		}
 
 		// Advisor 同跑接力：任务选用 advisor_grounding 时，把捕获的结构化结果交 Advisor 产草案。
@@ -160,6 +164,27 @@ func applyReflection(ctx context.Context, p ReflectionProvider, taskID, question
 		return question
 	}
 	return rc + "\n\n---\n\n" + question
+}
+
+// parseAttributionOutput 扫 raw 输出找首个 {"attribution":[...]} JSON 行，
+// 解码取 []contract.ClaimAnchor，剩余文本作为 Answer。
+// 解析失败或归因数组为空 → nil, raw（不中断流程，向后兼容）。
+// 假定归因块出现在输出起始（由 Analyst prompt 规定）；若 needle 前存在文本，该前缀会被丢弃。
+func parseAttributionOutput(raw string) ([]contract.ClaimAnchor, string) {
+	const needle = `{"attribution":`
+	idx := strings.Index(raw, needle)
+	if idx < 0 {
+		return nil, raw
+	}
+	var out struct {
+		Attribution []contract.ClaimAnchor `json:"attribution"`
+	}
+	dec := json.NewDecoder(strings.NewReader(raw[idx:]))
+	if err := dec.Decode(&out); err != nil || len(out.Attribution) == 0 {
+		return nil, raw
+	}
+	remaining := strings.TrimLeft(raw[idx+int(dec.InputOffset()):], "\r\n ")
+	return out.Attribution, remaining
 }
 
 // persistVerdict 把一个 evaluator 评分写入 eval_results（与 trajectory 关联）。

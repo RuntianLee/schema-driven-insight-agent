@@ -22,7 +22,7 @@ go run ./cmd/eval -llm mock -mode suite -adapter bankchurn \
   -schema examples/bankchurn/schema.yaml -tasks examples/bankchurn/eval/tasks_ab_reasoning_heldout
 ```
 每条应 `data_correctness 1.00 ✓` + `GATE ... : PASS ✓`。
-（mock 道下 `reasoning_quality` / `answer_grounding` 显示 `⚠below-min` 属预期，那两个 judge 仅在真 LLM A/B 道生效。）
+（mock 道下 `reasoning_quality` / `attribution_grounding` / `claim_coverage` 显示 `⚠below-min` 属预期，那几个 judge 仅在真 LLM A/B 道生效。）
 
 ### 真 LLM A/B（off-gate）
 

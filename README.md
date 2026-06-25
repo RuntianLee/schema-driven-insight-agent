@@ -17,7 +17,7 @@ Most "chat with your data" tools either (a) let an LLM write raw SQL against pro
 - **Structured tool, not free-form SQL** — the agent calls a parameterized `query_distribution` tool with a column/bucket whitelist; SQL is built by the framework, not the LLM.
 - **Proactive insight** — beyond the distribution table, the agent surfaces operational takeaways (churn cliffs, whale concentration, server skew).
 - **Two-agent, traceable recommendations** — an optional Advisor agent consumes *only* the Analyst's structured output (never the raw data) plus an adapter-supplied operational playbook, and drafts recommendations each traceable to a specific analyst result; a deterministic grounding check drops any hallucinated reference.
-- **Trajectory + Eval from day one** — every run is recorded; an eval harness gates `data_correctness` **and `advisor_grounding`** deterministically.
+- **Trajectory + Eval from day one** — every run is recorded; an eval harness gates `data_correctness`, `advisor_grounding`, **and `attribution_grounding`** deterministically (the last verifies every quantitative claim the Analyst makes is traceable to a real tool cell), with off-gate LLM-judge signals (`reasoning_quality`, `insight_novelty`, `claim_coverage`) for narrative quality.
 
 ## Quickstart (30 seconds, no API key, no database)
 
@@ -128,7 +128,7 @@ etl/csvload/       CSV file → de-identified Layer-2 (mirrors seedgen; bring yo
 etl/introspect/    Postgres introspection + adapter-draft rendering (cmd/init core)
 etl_health/        startup readiness gate (min_rows / frozen / data_as_of)
 trajectory/        run recording (PII redacted on write)
-eval_harness/      eval engine: data_correctness + advisor_grounding (deterministic gates) + LLM-judge evaluators; evalcli shared assembly + inline YAML fixtures
+eval_harness/      eval engine: data_correctness + advisor_grounding + attribution_grounding (deterministic gates) + LLM-judge evaluators (reasoning_quality / insight_novelty / claim_coverage); evalcli shared assembly + inline YAML fixtures
 llm/               LLM client resolution (MiniMax; mock fallback)
 prompts/           methodology system prompts (Analyst + Advisor; no business data)
 cmd/init/          scaffold a new adapter from a live Postgres (draft with TODO placeholders)

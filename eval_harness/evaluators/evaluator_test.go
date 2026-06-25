@@ -3,8 +3,10 @@ package evaluators
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
+	"github.com/RuntianLee/schema-driven-insight-agent/contract"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,5 +33,26 @@ func TestRegistryRegisterAndGet(t *testing.T) {
 	}
 	if _, ok := reg.Get("missing"); ok {
 		t.Fatalf("missing evaluator should not be found")
+	}
+}
+
+func TestClaimAnchorJSON(t *testing.T) {
+	orig := []contract.ClaimAnchor{
+		{Claim: "流失率 60%", Anchor: "q1.profile.mean", Kind: "cell", ClaimedValue: 0.6},
+		{Claim: "人均 200k", Anchor: "ratio(q1.profile.mean,q1.profile.count)", Kind: "derived", ClaimedValue: 200000},
+	}
+	b, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []contract.ClaimAnchor
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Claim != "流失率 60%" || got[1].Kind != "derived" {
+		t.Fatalf("往返失真: %+v", got)
+	}
+	if got[0].ClaimedValue != 0.6 || got[1].ClaimedValue != 200000 {
+		t.Fatalf("ClaimedValue 往返失真: %+v", got)
 	}
 }

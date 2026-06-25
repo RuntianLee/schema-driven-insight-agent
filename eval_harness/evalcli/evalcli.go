@@ -29,7 +29,7 @@ import (
 )
 
 // evalOrder 是报告列顺序，也是 gate 范围口径（data_correctness + advisor_grounding 决定退出码）。
-var evalOrder = []string{"data_correctness", "advisor_grounding", "reasoning_quality", "answer_grounding", "insight_novelty"}
+var evalOrder = []string{"data_correctness", "advisor_grounding", "attribution_grounding", "claim_coverage", "reasoning_quality", "insight_novelty"}
 
 // FixtureFunc 为单个任务 seed 独立 fixture：dir 是本任务的临时目录，返回已就绪的
 // Layer2 SQLite 连接（evalcli 负责 Close 与目录清理）。
@@ -141,8 +141,9 @@ func runPass(
 		evalReg := evaluators.NewRegistry()
 		evalReg.Register(evaluators.NewDataCorrectness())
 		evalReg.Register(evaluators.NewAdvisorGrounding())
+		evalReg.Register(evaluators.NewAttributionGrounding())
+		evalReg.Register(evaluators.NewClaimCoverage(judge))
 		evalReg.Register(evaluators.NewReasoningQuality(judge))
-		evalReg.Register(evaluators.NewAnswerGrounding(judge))
 		evalReg.Register(evaluators.NewInsightNovelty(judge))
 
 		rep, err := runners.RunSuite(context.Background(), runners.Config{
@@ -256,7 +257,7 @@ func mergeInto(dst, src *evalpkg.Report) {
 	for _, tid := range src.Tasks {
 		for _, name := range evalOrder {
 			if s, ok := src.Scores[tid][name]; ok {
-				dst.Add(tid, s, name == "data_correctness" || name == "advisor_grounding")
+				dst.Add(tid, s, name == "data_correctness" || name == "advisor_grounding" || name == "attribution_grounding")
 			}
 		}
 	}

@@ -220,6 +220,8 @@ evaluators:
 
 Data-source resolution priority: **inline `fixture:` > Go-injected `FixtureFunc` > `-db` shared DB**. `data_correctness` compares the real tool output field-by-field against pinned values (determinism makes it exactly assertable), and it decides `cmd/eval`'s exit code (gate fail → exit 1, drop-in for CI). The LLM-judge evaluators (`reasoning_quality`/`insight_novelty`) score narrative quality in report mode.
 
+For insight tasks where the Analyst makes quantitative claims, list `attribution_grounding: {}` — a **deterministic gate** that resolves the Analyst's self-produced attribution block (each `claim → anchor → claimed_value`) against the real tool cells and fails if any claim is unresolvable or mismatched (so it joins `data_correctness`/`advisor_grounding` in the CI exit code). Pair it with `claim_coverage: {}`, an **off-gate** LLM signal that reports what fraction of the narrative's quantitative claims were actually declared in the attribution block. Both skip cleanly when the Analyst emits no attribution block (backward-compatible).
+
 The mock lane (default) needs no LLM key: the agent replays `llm_turns`, the judge uses a mock, and `data_correctness` is fully deterministic. For the real-LLM lane pass `-llm minimax -config config/llm.yaml`.
 
 ### Advisor grounding gate (two-agent tasks)
