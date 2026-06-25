@@ -3,6 +3,7 @@ package evaluators
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
@@ -98,5 +99,40 @@ func TestAttributionGrounding_Table(t *testing.T) {
 				t.Errorf("Evaluator name: %q", s.Evaluator)
 			}
 		})
+	}
+}
+
+func attrResult(claims []contract.ClaimAnchor) TaskResult {
+	return TaskResult{ToolCalls: attrToolCalls(), AttributionClaims: claims}
+}
+
+func TestAttributionGrounding_MinClaims(t *testing.T) {
+	resolved := []contract.ClaimAnchor{{Claim: "均值0.6", Anchor: "q1.profile.mean", Kind: "cell", ClaimedValue: 0.6}}
+	mismatch := []contract.ClaimAnchor{{Claim: "均值9999", Anchor: "q1.profile.mean", Kind: "cell", ClaimedValue: 9999}}
+	ctx := context.Background()
+
+	// 1) 未设 min_claims（spec=nil）+ nil → skip（向后兼容守卫）
+	if s, err := NewAttributionGrounding().Evaluate(ctx, attrResult(nil), nil); err != nil || !s.Pass || !strings.Contains(s.Display, "skip") {
+		t.Fatalf("未设 min_claims + nil 应 skip pass，得到 %+v err=%v", s, err)
+	}
+	// 2) min_claims:1 + nil → FAIL
+	if s, _ := NewAttributionGrounding().Evaluate(ctx, attrResult(nil), specNode(t, "min_claims: 1")); s.Pass {
+		t.Fatalf("min_claims:1 + 缺块应 FAIL，得到 %+v", s)
+	}
+	// 3) min_claims:1 + 1 resolved → pass
+	if s, _ := NewAttributionGrounding().Evaluate(ctx, attrResult(resolved), specNode(t, "min_claims: 1")); !s.Pass {
+		t.Fatalf("min_claims:1 + 1 resolved 应 pass，得到 %+v", s)
+	}
+	// 4) min_claims:2 + 1 条 → FAIL（不足），Display 须诚实显示实得分子 1/2
+	if s, _ := NewAttributionGrounding().Evaluate(ctx, attrResult(resolved), specNode(t, "min_claims: 2")); s.Pass || !strings.Contains(s.Display, "1/2") {
+		t.Fatalf("min_claims:2 + 仅1条应 FAIL 且 Display 含 1/2，得到 %+v", s)
+	}
+	// 5) min_claims:1 + 1 mismatch → FAIL（现有 bad 逻辑不变）
+	if s, _ := NewAttributionGrounding().Evaluate(ctx, attrResult(mismatch), specNode(t, "min_claims: 1")); s.Pass {
+		t.Fatalf("min_claims:1 + mismatch 应 FAIL，得到 %+v", s)
+	}
+	// 6) min_claims:0 显式 + nil → skip（与未设等价）
+	if s, _ := NewAttributionGrounding().Evaluate(ctx, attrResult(nil), specNode(t, "min_claims: 0")); !s.Pass {
+		t.Fatalf("min_claims:0 + nil 应 skip pass，得到 %+v", s)
 	}
 }
