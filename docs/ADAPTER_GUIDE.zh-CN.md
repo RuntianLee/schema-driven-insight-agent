@@ -219,6 +219,8 @@ evaluators:
 
 数据源解析优先级：**任务内联 `fixture:` > Go 调用方注入的 `FixtureFunc` > `-db` 共享库**。`data_correctness` 把真实工具输出逐字段对比钉死值（确定性让它精确可断言），它决定 `cmd/eval` 的退出码（gate 失败 → 退出 1，可直接接入 CI）。LLM-judge 评测器（`reasoning_quality`/`insight_novelty`）给叙述质量打分，运行在报告模式。
 
+对于 Analyst 会给出定量主张的洞察类任务，列出 `attribution_grounding: {}`——一道**确定性 gate**，把 Analyst 自产的归因块（每条 `claim → anchor → claimed_value`）对真实工具单元格逐条解析，任一主张不可溯源或数值不符即失败（因此与 `data_correctness`/`advisor_grounding` 一同计入 CI 退出码）。配合 `claim_coverage: {}`——一个**off-gate** LLM 软信号，报告叙述里的定量主张有多大比例真的在归因块中声明了。两者在 Analyst 未输出归因块时都干净 skip（向后兼容）。
+
 mock 道（默认）无需 LLM key：agent 回放 `llm_turns`、judge 用 mock，`data_correctness` 完全确定性。真 LLM 道传 `-llm minimax -config config/llm.yaml`。
 
 ### Advisor grounding 门（双 agent 任务）
