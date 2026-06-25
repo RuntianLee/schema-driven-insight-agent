@@ -88,7 +88,33 @@ func (r *Report) ConsoleTable() string {
 		gate = "FAIL ✗"
 	}
 	b.WriteString("GATE (deterministic: " + strings.Join(r.gateEvaluators(), " + ") + "): " + gate + "\n")
+	// 失败/异常明细：把已算出却原先丢弃的 Detail（attribution badDetails、claim_coverage 报错等）
+	// 渲染出来，让 gate 失败可定位——否则只见 "0/N ✗" 不知哪条锚为何挂。
+	// 条件排除 off-gate judge 的常态 Pass=false（非失败），只印确定性失败 / Errored / BelowMin。
+	if d := r.failureDetails(); d != "" {
+		b.WriteString("明细:\n" + d)
+	}
 	return b.String()
+}
+
+// failureDetails 收集需要暴露的逐项失败/异常 Detail（每行 "  ⤷ <task> · <evaluator>: <detail>"）。
+func (r *Report) failureDetails() string {
+	var lines []string
+	for _, tid := range r.sortedTasks() {
+		for _, e := range r.Evaluators {
+			s := r.Scores[tid][e]
+			if s.Detail == "" {
+				continue
+			}
+			if s.Errored || s.BelowMin || (r.det[e] && !s.Pass) {
+				lines = append(lines, fmt.Sprintf("  ⤷ %s · %s: %s", tid, e, s.Detail))
+			}
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 // Markdown 渲染落盘表格（简历/博客素材）。

@@ -119,14 +119,14 @@ filter 的值可以是标量（等值）或对象 `{"op": "<", "value": N}`，op
 - q{N}.groups[i].profile.<字段> / q{N}.groups[i].data[j].<字段>（★首选：按数组下标照结果 JSON 直接写，如 q2.groups[1].data[0].avg_value）
 - q{N}.group[键].profile.<字段>（按组名匹配，也可，如 q2.group[EU].profile.mean）
 - q{N}.bucket[键].<字段> / q{N}.data[j].<字段>（如 q1.bucket[500-1000].pct_players）
-- q{N}.table.row[i].<列名>（如 q3.table.row[0].n）
+- q{N}.table.rows[i].<列名>（★首选：复数 rows 照结果 JSON 直接写，如 q2.table.rows[1].avg_money；单数 q{N}.table.row[i].<列名> 也可）
 - q{N}.groups_tail.<字段>（如 q1.groups_tail.player_count）
 
-派生式算子表（算子(操作数1,操作数2)，操作数用上方路径语法）：
-diff=a−b 绝对差; pct=a/b 占比; pct_change=(a−b)/b 相对变化; pct_points=a−b 两百分比相减（百分点）; ratio=a/b 倍数; spread=a−b 分位/离散度差; sum=求和（变长）
+派生式：写成**函数调用** `算子(操作数1, 操作数2)`，操作数用上方路径语法。**禁止写中缀算式**——`ratio=a/b`、`a/b`、`q1.x/q2.y` 都是错的，必须写成 `ratio(q1.x, q2.y)`。可用算子（冒号后是含义、不是写法）：
+ratio(a,b)：a/b 倍数; pct(a,b)：a/b 占比; diff(a,b)：a−b 绝对差; pct_change(a,b)：(a−b)/b 相对变化; pct_points(a,b)：a−b 两百分比相减（百分点）; spread(a,b)：a−b 分位/离散度差; sum(…)：求和（变长）
 
-kind 取值二选一：cell = anchor 直接引用某工具字段；derived = anchor 是上方算子派生式。
+kind 取值二选一：cell = anchor 直接引用某工具字段；derived = anchor 是上方算子函数调用。
 
-每个数字主张都必须接地：anchor 要么是某工具单元格路径（kind=cell），要么是上方算子派生式（kind=derived）。**无法接地的数字就不要作为定量主张写进结论**——留空 anchor 会被判为"未接地"、计入 gate 失败（宁可不报这个数，也不要报一个无出处的数）。claimed_value 量纲与 anchor 单元格一致（占比用小数，如 60%→0.6）。
+每个数字主张都必须接地：anchor 要么是某工具单元格路径（kind=cell），要么是上方算子函数调用（kind=derived）。**一个数字主张对应一条锚**（一个路径或一个派生式函数调用）——不要在一个 anchor 里用逗号塞多个单元格；一句话里若有多个数字，拆成多条 claim 分别声明。**无法接地的数字就不要作为定量主张写进结论**——留空 anchor 会被判为"未接地"、计入 gate 失败（宁可不报这个数，也不要报一个无出处的数）。claimed_value 量纲与 anchor 单元格一致（占比用小数，如 60%→0.6）。
 
 【完整性约束】叙述里出现的每一个数字主张（含百分比/倍数/比较结论）都必须在归因块里声明；漏声明视同无出处，会被评审标记。

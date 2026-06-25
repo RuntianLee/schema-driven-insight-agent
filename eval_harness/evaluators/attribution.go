@@ -159,8 +159,9 @@ func navTableCell(m map[string]any, segs []string) (float64, error) {
 		return 0, fmt.Errorf("table 寻址须为 row[i].<col>，得到 %v", segs)
 	}
 	sel := selectorRe.FindStringSubmatch(segs[0])
-	if sel == nil || sel[1] != "row" {
-		return 0, fmt.Errorf("table 首段须为 row[i]: %q", segs[0])
+	// 接受 row[i]（关键字）与 rows[i]（字面 JSON 字段名）——模型倾向镜像结果里的复数 rows。
+	if sel == nil || (sel[1] != "row" && sel[1] != "rows") {
+		return 0, fmt.Errorf("table 首段须为 row[i] 或 rows[i]: %q", segs[0])
 	}
 	i, err := strconv.Atoi(sel[2])
 	if err != nil {
@@ -357,7 +358,20 @@ func OpCatalog() string {
 		if i > 0 {
 			b.WriteString("; ")
 		}
-		fmt.Fprintf(&b, "%s=%s", n, derivOps[n].Doc)
+		// 函数调用形式 name(args)：doc，避免被抄成中缀 name=expr（2026-06-25 T1 实证）。
+		fmt.Fprintf(&b, "%s(%s)：%s", n, opArgPlaceholder(derivOps[n].Arity), derivOps[n].Doc)
 	}
 	return b.String()
+}
+
+// opArgPlaceholder 按 arity 给算子参数占位：变长用「…」，定长用 a,b,c…。
+func opArgPlaceholder(arity int) string {
+	if arity < 0 {
+		return "…"
+	}
+	parts := make([]string, 0, arity)
+	for i := 0; i < arity; i++ {
+		parts = append(parts, string(rune('a'+i)))
+	}
+	return strings.Join(parts, ",")
 }
