@@ -28,7 +28,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// evalOrder 是报告列顺序，也是 gate 范围口径（data_correctness + advisor_grounding 决定退出码）。
+// evalOrder 是报告列顺序，也是 gate 范围口径（data_correctness + advisor_grounding + attribution_grounding 决定退出码）。
+// gate 口径须与下方 mergeInto 的确定性判断保持一致。
 var evalOrder = []string{"data_correctness", "advisor_grounding", "attribution_grounding", "claim_coverage", "reasoning_quality", "insight_novelty"}
 
 // FixtureFunc 为单个任务 seed 独立 fixture：dir 是本任务的临时目录，返回已就绪的

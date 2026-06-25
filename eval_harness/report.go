@@ -38,6 +38,18 @@ func (r *Report) Add(taskID string, s evaluators.Score, deterministic bool) {
 }
 
 // GateFailed：任一 Deterministic evaluator 的 Pass==false。
+// gateEvaluators 返回参与 gate 的确定性 evaluator 名（按报告列序），
+// 供报告标签动态生成，避免硬编码与 mergeInto 的 gate 口径漂移。
+func (r *Report) gateEvaluators() []string {
+	var g []string
+	for _, name := range r.Evaluators {
+		if r.det[name] {
+			g = append(g, name)
+		}
+	}
+	return g
+}
+
 func (r *Report) GateFailed() bool {
 	for _, byEval := range r.Scores {
 		for name, s := range byEval {
@@ -75,7 +87,7 @@ func (r *Report) ConsoleTable() string {
 	if r.GateFailed() {
 		gate = "FAIL ✗"
 	}
-	b.WriteString("GATE (deterministic: data_correctness + advisor_grounding): " + gate + "\n")
+	b.WriteString("GATE (deterministic: " + strings.Join(r.gateEvaluators(), " + ") + "): " + gate + "\n")
 	return b.String()
 }
 
@@ -95,7 +107,7 @@ func (r *Report) Markdown() string {
 	if r.GateFailed() {
 		gate = "FAIL"
 	}
-	fmt.Fprintf(&b, "\n**GATE (deterministic: data_correctness + advisor_grounding): %s**\n", gate)
+	fmt.Fprintf(&b, "\n**GATE (deterministic: %s): %s**\n", strings.Join(r.gateEvaluators(), " + "), gate)
 	return b.String()
 }
 
