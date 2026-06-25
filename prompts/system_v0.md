@@ -126,6 +126,6 @@ diff=a−b 绝对差; pct=a/b 占比; pct_change=(a−b)/b 相对变化; pct_poi
 
 kind 取值二选一：cell = anchor 直接引用某工具字段；derived = anchor 是上方算子派生式。
 
-找不到出处则 anchor 留空字符串（kind 仍须填）。claimed_value 量纲与 anchor 单元格一致（占比用小数，如 60%→0.6）。
+每个数字主张都必须接地：anchor 要么是某工具单元格路径（kind=cell），要么是上方算子派生式（kind=derived）。**无法接地的数字就不要作为定量主张写进结论**——留空 anchor 会被判为"未接地"、计入 gate 失败（宁可不报这个数，也不要报一个无出处的数）。claimed_value 量纲与 anchor 单元格一致（占比用小数，如 60%→0.6）。
 
 【完整性约束】叙述里出现的每一个数字主张（含百分比/倍数/比较结论）都必须在归因块里声明；漏声明视同无出处，会被评审标记。

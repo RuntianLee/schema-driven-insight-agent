@@ -32,7 +32,8 @@ func (a *AttributionGrounding) Evaluate(_ context.Context, res TaskResult, _ *ya
 		v := EvalAnchor(res.ToolCalls, c.Anchor, c.ClaimedValue, defaultAttrTol)
 		if v.Status == AttrMismatch || v.Status == AttrUnresolvable {
 			bad++
-			badDetails = append(badDetails, fmt.Sprintf("%s %s", c.Anchor, v.Status))
+			// 带上 claim 文本便于定位；空锚（未接地）也能从 anchor=%q 看出。
+			badDetails = append(badDetails, fmt.Sprintf("「%s」anchor=%q %s", c.Claim, c.Anchor, v.Status))
 		}
 	}
 	n := len(res.AttributionClaims)

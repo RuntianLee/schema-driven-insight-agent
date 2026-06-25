@@ -201,12 +201,11 @@ func TestParseAttributionOutput(t *testing.T) {
 叙述。`,
 		},
 		{
-			name: "attribution 数组为空 → nil + 原文",
+			name: "attribution 数组为空 → nil + 剥离 JSON 后的叙述",
 			raw: `{"attribution":[]}
 叙述文本。`,
 			wantNilClaims: true,
-			wantAnswer: `{"attribution":[]}
-叙述文本。`,
+			wantAnswer:    "叙述文本。",
 		},
 	}
 	for _, tt := range tests {

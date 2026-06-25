@@ -168,7 +168,8 @@ func applyReflection(ctx context.Context, p ReflectionProvider, taskID, question
 
 // parseAttributionOutput 扫 raw 输出找首个 {"attribution":[...]} JSON 行，
 // 解码取 []contract.ClaimAnchor，剩余文本作为 Answer。
-// 解析失败或归因数组为空 → nil, raw（不中断流程，向后兼容）。
+// - 无 needle 或 JSON 解码失败（无法定位 JSON 结束）→ nil, raw（向后兼容，不中断）。
+// - 解码成功但数组为空 → nil, remaining（无主张，但仍剥离 JSON 块，避免 JSON 串污染 Answer）。
 // 假定归因块出现在输出起始（由 Analyst prompt 规定）；若 needle 前存在文本，该前缀会被丢弃。
 func parseAttributionOutput(raw string) ([]contract.ClaimAnchor, string) {
 	const needle = `{"attribution":`
@@ -180,10 +181,13 @@ func parseAttributionOutput(raw string) ([]contract.ClaimAnchor, string) {
 		Attribution []contract.ClaimAnchor `json:"attribution"`
 	}
 	dec := json.NewDecoder(strings.NewReader(raw[idx:]))
-	if err := dec.Decode(&out); err != nil || len(out.Attribution) == 0 {
-		return nil, raw
+	if err := dec.Decode(&out); err != nil {
+		return nil, raw // 无法定位 JSON 结束，保留原文
 	}
 	remaining := strings.TrimLeft(raw[idx+int(dec.InputOffset()):], "\r\n ")
+	if len(out.Attribution) == 0 {
+		return nil, remaining // 空数组：无主张，但 JSON 块已剥离
+	}
 	return out.Attribution, remaining
 }
 
