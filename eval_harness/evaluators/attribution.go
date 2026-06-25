@@ -37,11 +37,14 @@ func Resolve(calls []contract.ToolCall, path string) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if n < 1 || n > len(calls) {
-		return 0, fmt.Errorf("%s 越界（共 %d 个结果）", segs[0], len(calls))
+	// q{N} 只数 status=OK 的结果：SCHEMA_ERROR/INSUFFICIENT_DATA 等失败重试不计数，
+	// 否则一次 schema 重试就会把后续所有锚的编号顶偏（2026-06-25 T1 实证）。
+	ok := okCalls(calls)
+	if n < 1 || n > len(ok) {
+		return 0, fmt.Errorf("%s 越界（共 %d 个成功结果）", segs[0], len(ok))
 	}
 	var cur any
-	b, err := json.Marshal(calls[n-1].Response)
+	b, err := json.Marshal(ok[n-1].Response)
 	if err != nil {
 		return 0, fmt.Errorf("序列化 Response 失败: %w", err)
 	}
@@ -49,6 +52,17 @@ func Resolve(calls []contract.ToolCall, path string) (float64, error) {
 		return 0, fmt.Errorf("JSON 反序列化 Response 失败: %w", err)
 	}
 	return navigate(cur, segs[1:])
+}
+
+// okCalls 过滤出 status=OK 的工具结果，供 q{N} 索引（失败/重试不计数，编号对重试鲁棒）。
+func okCalls(calls []contract.ToolCall) []contract.ToolCall {
+	out := make([]contract.ToolCall, 0, len(calls))
+	for _, c := range calls {
+		if c.Response.Status == contract.StatusOK {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // parseQ 解析 "q3" → 3。

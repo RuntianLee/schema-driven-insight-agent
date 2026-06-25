@@ -93,6 +93,26 @@ func TestResolve_TableCell(t *testing.T) {
 	}
 }
 
+// TestResolve_SkipsSchemaError 验证 q{N} 只数 status=OK 的结果：
+// SCHEMA_ERROR 重试不计数，故 q1 指向第一个成功结果而非失败的那次（2026-06-25 T1 实证）。
+func TestResolve_SkipsSchemaError(t *testing.T) {
+	calls := []contract.ToolCall{
+		{Name: "analyze", Response: contract.Response{Status: contract.StatusSchemaError}},
+		tableCalls()[0], // 成功结果（含 table，avg_money 行 1=8000）
+	}
+	got, err := Resolve(calls, "q1.table.row[1].avg_money")
+	if err != nil {
+		t.Fatalf("q1 应跳过 SCHEMA_ERROR 指向成功结果，却报错: %v", err)
+	}
+	if got != 8000.0 {
+		t.Fatalf("got %v want 8000", got)
+	}
+	// 只有 1 个成功结果时 q2 应越界（计数基于 OK 结果数）。
+	if _, err := Resolve(calls, "q2.table.row[0].avg_money"); err == nil {
+		t.Fatal("q2 应越界（仅 1 个成功结果）")
+	}
+}
+
 func TestResolve_TableCell_Bad(t *testing.T) {
 	calls := tableCalls()
 	for _, path := range []string{
@@ -188,7 +208,7 @@ func TestEvalAnchor_ToleranceAndZero(t *testing.T) {
 	if v := EvalAnchor(calls, "q2.group[EU].profile.mean", 2985, defaultAttrTol); v.Status != AttrResolved {
 		t.Fatalf("2985 应在容差内 resolved，得到 %s", v.Status)
 	}
-	zeroCalls := []contract.ToolCall{{Response: contract.Response{Profile: &contract.DistProfile{Mean: 0}}}}
+	zeroCalls := []contract.ToolCall{{Response: contract.Response{Status: contract.StatusOK, Profile: &contract.DistProfile{Mean: 0}}}}
 	if v := EvalAnchor(zeroCalls, "q1.profile.mean", 0, defaultAttrTol); v.Status != AttrResolved {
 		t.Fatalf("0≈0 应 resolved，得到 %s", v.Status)
 	}
