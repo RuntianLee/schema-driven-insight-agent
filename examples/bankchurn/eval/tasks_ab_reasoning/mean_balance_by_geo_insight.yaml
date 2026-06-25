@@ -15,7 +15,8 @@ fixture:
         - {count: 50, values: {Geography: Spain,    Balance: 0}}
         - {count: 50, values: {Geography: Spain,    Balance: 120000}}
 evaluators:
-  attribution_grounding: {}
+  attribution_grounding:
+    min_claims: 1
   claim_coverage: {}
   data_correctness:
     tool: analyze

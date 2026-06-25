@@ -13,7 +13,8 @@ fixture:
         - {count: 8,  values: {Balance: 200000, Exited: 0}}
         - {count: 80, values: {Balance: 50000,  Exited: 0}}
 evaluators:
-  attribution_grounding: {}
+  attribution_grounding:
+    min_claims: 1
   claim_coverage: {}
   data_correctness:
     tool: analyze

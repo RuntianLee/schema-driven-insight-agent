@@ -19,12 +19,29 @@ func NewAttributionGrounding() *AttributionGrounding { return &AttributionGround
 func (a *AttributionGrounding) Name() string        { return "attribution_grounding" }
 func (a *AttributionGrounding) Deterministic() bool { return true }
 
-func (a *AttributionGrounding) Evaluate(_ context.Context, res TaskResult, _ *yaml.Node) (Score, error) {
-	if len(res.AttributionClaims) == 0 {
+type attrGroundingSpec struct {
+	MinClaims int `yaml:"min_claims"` // 至少几条归因主张（0=不要求，缺块 skip；≥1=缺块/不足→FAIL）
+}
+
+func (a *AttributionGrounding) Evaluate(_ context.Context, res TaskResult, spec *yaml.Node) (Score, error) {
+	var sp attrGroundingSpec
+	if spec != nil {
+		if err := spec.Decode(&sp); err != nil {
+			return Score{}, fmt.Errorf("decode attribution_grounding spec: %w", err)
+		}
+	}
+	n := len(res.AttributionClaims)
+	if n < sp.MinClaims {
+		// 要求产块却不足 → FAIL（治理缺块 skip-PASS，2026-06-26 T2 实测 40%）。
 		return Score{
-			Evaluator: a.Name(), Value: 1, Pass: true,
-			Display: "skip（无归因块）",
+			Evaluator: a.Name(), Value: 0, Pass: false,
+			Display: fmt.Sprintf("%d/%d ✗（要求≥%d 条归因块）", n, sp.MinClaims, sp.MinClaims),
+			Detail:  "应产归因块的量化任务未产块/不足——缺块不再 skip-pass",
 		}, nil
+	}
+	if n == 0 {
+		// 无要求（min_claims=0）且无块 → skip（向后兼容，默认行为零改动）。
+		return Score{Evaluator: a.Name(), Value: 1, Pass: true, Display: "skip（无归因块）"}, nil
 	}
 	bad := 0
 	var badDetails []string
@@ -32,16 +49,11 @@ func (a *AttributionGrounding) Evaluate(_ context.Context, res TaskResult, _ *ya
 		v := EvalAnchor(res.ToolCalls, c.Anchor, c.ClaimedValue, defaultAttrTol)
 		if v.Status == AttrMismatch || v.Status == AttrUnresolvable {
 			bad++
-			// 带上 claim 文本便于定位；空锚（未接地）也能从 anchor=%q 看出。
 			badDetails = append(badDetails, fmt.Sprintf("「%s」anchor=%q %s", c.Claim, c.Anchor, v.Status))
 		}
 	}
-	n := len(res.AttributionClaims)
 	pass := bad == 0
-	val := 1.0
-	if n > 0 {
-		val = float64(n-bad) / float64(n)
-	}
+	val := float64(n-bad) / float64(n) // n≥1 此处保证（n==0 已上方返回）
 	var display string
 	if pass {
 		display = fmt.Sprintf("%d/%d ✓", n, n)

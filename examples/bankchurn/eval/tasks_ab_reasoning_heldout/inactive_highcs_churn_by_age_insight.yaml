@@ -15,7 +15,8 @@ fixture:
         - {count: 30, values: {Age: 55, CreditScore: 720, IsActiveMember: 0, Exited: 1}}
         - {count: 50, values: {Age: 45, CreditScore: 650, IsActiveMember: 1, Exited: 0}}
 evaluators:
-  attribution_grounding: {}
+  attribution_grounding:
+    min_claims: 1
   claim_coverage: {}
   data_correctness:
     tool: analyze

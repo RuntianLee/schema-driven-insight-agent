@@ -13,7 +13,8 @@ fixture:
         - {count: 12, values: {CreditScore: 550, Exited: 0}}
         - {count: 70, values: {CreditScore: 700, Exited: 0}}
 evaluators:
-  attribution_grounding: {}
+  attribution_grounding:
+    min_claims: 1
   claim_coverage: {}
   data_correctness:
     tool: analyze
