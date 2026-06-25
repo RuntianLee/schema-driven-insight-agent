@@ -57,3 +57,15 @@ func TestSystemPromptDocumentsAnalyzeAggregateWhitelist(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemPromptDocumentsLiteralArrayAnchor(t *testing.T) {
+	// 锚文法适应：prompt 须把字面 JSON-path 形式（数组下标）作为示例，与 resolver navSelector 对齐。
+	for _, want := range []string{
+		"groups[i]",
+		"q2.groups[1].data[0].avg_value",
+	} {
+		if !strings.Contains(SystemV0, want) {
+			t.Fatalf("system prompt 须文档化字面数组下标锚；缺 %q", want)
+		}
+	}
+}

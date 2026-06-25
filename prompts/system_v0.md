@@ -116,8 +116,9 @@ filter 的值可以是标量（等值）或对象 `{"op": "<", "value": N}`，op
 
 路径语法（照工具结果里出现的字段名写，**q{N} 对应第 N 个成功(status=OK)的工具结果**——SCHEMA_ERROR 等失败重试不计数，即第一个成功结果永远是 q1）：
 - q{N}.profile.<字段>（如 q1.profile.mean）
-- q{N}.group[键].profile.<字段>（如 q2.group[EU].profile.mean）
-- q{N}.bucket[键].<字段>（如 q1.bucket[500-1000].pct_players）
+- q{N}.groups[i].profile.<字段> / q{N}.groups[i].data[j].<字段>（★首选：按数组下标照结果 JSON 直接写，如 q2.groups[1].data[0].avg_value）
+- q{N}.group[键].profile.<字段>（按组名匹配，也可，如 q2.group[EU].profile.mean）
+- q{N}.bucket[键].<字段> / q{N}.data[j].<字段>（如 q1.bucket[500-1000].pct_players）
 - q{N}.table.row[i].<列名>（如 q3.table.row[0].n）
 - q{N}.groups_tail.<字段>（如 q1.groups_tail.player_count）
 
