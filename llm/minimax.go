@@ -62,8 +62,9 @@ type chatReq struct {
 }
 
 type message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ReasoningContent string `json:"reasoning_content,omitempty"` // 推理模型思考通道；content 空时回退
 }
 
 type chatResp struct {
@@ -118,5 +119,15 @@ func (c *minimaxClient) Call(ctx context.Context, prompt string) (string, int, i
 	}
 	tokIn, tokOut := r.Usage.PromptTokens, r.Usage.CompletionTokens
 	cost := float64(tokIn)/1000*costPerKTokenIn + float64(tokOut)/1000*costPerKTokenOut
-	return r.Choices[0].Message.Content, tokIn, tokOut, cost, nil
+	msg := r.Choices[0].Message
+	content := msg.Content
+	if content == "" && msg.ReasoningContent != "" {
+		// 推理模型把答案留在思考通道、content 空：回退取 reasoning_content。
+		content = msg.ReasoningContent
+	}
+	if content == "" {
+		// 仍空 → 返回可诊断错误（带原始 body），不再静默空串（2026-06-25 claim_coverage 空回复实证）。
+		return "", tokIn, tokOut, cost, fmt.Errorf("minimax: empty content（content 与 reasoning_content 均空）; body=%s", string(raw))
+	}
+	return content, tokIn, tokOut, cost, nil
 }
