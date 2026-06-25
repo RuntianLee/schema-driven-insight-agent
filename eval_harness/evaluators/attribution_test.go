@@ -113,6 +113,19 @@ func TestResolve_SkipsSchemaError(t *testing.T) {
 	}
 }
 
+// TestResolve_TableCell_PluralRows：模型镜像字面 JSON 写复数 rows[i]（非单数 row 关键字），
+// 须与 row[i] 同样解析（2026-06-25 T1 实证：table 形状任务模型全写 table.rows[i]）。
+func TestResolve_TableCell_PluralRows(t *testing.T) {
+	calls := tableCalls()
+	got, err := Resolve(calls, "q1.table.rows[1].avg_money")
+	if err != nil {
+		t.Fatalf("复数 rows[i] 应解析: %v", err)
+	}
+	if got != 8000.0 {
+		t.Fatalf("got %v want 8000", got)
+	}
+}
+
 func TestResolve_TableCell_Bad(t *testing.T) {
 	calls := tableCalls()
 	for _, path := range []string{
@@ -122,6 +135,15 @@ func TestResolve_TableCell_Bad(t *testing.T) {
 		if _, err := Resolve(calls, path); err == nil {
 			t.Errorf("%s: 应报错", path)
 		}
+	}
+}
+
+// TestOpCatalog_ShowsCallForm：catalog 须用函数调用形式 ratio(a,b) 而非中缀 ratio=，
+// 否则模型抄成中缀算式 anchor（2026-06-25 T1 实证：模型把 prompt 的 ratio=a/b 照抄为 ratio=q2.../q1...）。
+func TestOpCatalog_ShowsCallForm(t *testing.T) {
+	cat := OpCatalog()
+	if !strings.Contains(cat, "ratio(") {
+		t.Fatalf("OpCatalog 须用函数调用形式 ratio(...)：\n%s", cat)
 	}
 }
 

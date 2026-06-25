@@ -69,3 +69,16 @@ func TestSystemPromptDocumentsLiteralArrayAnchor(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemPromptDerivedCallFormAndOneAnchor(t *testing.T) {
+	// T1 实证驱动：派生式须用函数调用形式（非中缀 ratio=a/b 被抄）、表寻址复数首选、一锚一主张。
+	for _, want := range []string{
+		"ratio(a,b)",            // 派生式函数调用形式（非中缀 ratio=）
+		"table.rows[i]",         // 表寻址复数 rows 首选（镜像字面 JSON）
+		"一个数字主张对应一条锚", // 一锚一主张纪律（禁逗号塞多单元格）
+	} {
+		if !strings.Contains(SystemV0, want) {
+			t.Fatalf("system prompt 缺 %q（T1 锚文法补全）", want)
+		}
+	}
+}
