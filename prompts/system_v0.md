@@ -114,7 +114,7 @@ filter 的值可以是标量（等值）或对象 `{"op": "<", "value": N}`，op
 
 然后另起一行输出自然语言结论。
 
-路径语法（照工具结果里出现的字段名写，q{N} 对应第 N 次工具调用）：
+路径语法（照工具结果里出现的字段名写，**q{N} 对应第 N 个成功(status=OK)的工具结果**——SCHEMA_ERROR 等失败重试不计数，即第一个成功结果永远是 q1）：
 - q{N}.profile.<字段>（如 q1.profile.mean）
 - q{N}.group[键].profile.<字段>（如 q2.group[EU].profile.mean）
 - q{N}.bucket[键].<字段>（如 q1.bucket[500-1000].pct_players）
