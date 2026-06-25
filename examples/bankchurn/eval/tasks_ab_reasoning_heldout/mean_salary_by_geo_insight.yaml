@@ -14,7 +14,8 @@ fixture:
         - {count: 100, values: {Geography: Germany, EstimatedSalary: 100000}}
         - {count: 100, values: {Geography: Spain,    EstimatedSalary: 100000}}
 evaluators:
-  attribution_grounding: {}
+  attribution_grounding:
+    min_claims: 1
   claim_coverage: {}
   data_correctness:
     tool: analyze

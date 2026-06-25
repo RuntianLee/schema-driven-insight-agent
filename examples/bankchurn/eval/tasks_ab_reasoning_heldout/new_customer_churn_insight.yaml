@@ -13,7 +13,8 @@ fixture:
         - {count: 6,  values: {Tenure: 1, Exited: 0}}
         - {count: 80, values: {Tenure: 5, Exited: 0}}
 evaluators:
-  attribution_grounding: {}
+  attribution_grounding:
+    min_claims: 1
   claim_coverage: {}
   data_correctness:
     tool: analyze
