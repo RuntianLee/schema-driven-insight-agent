@@ -108,27 +108,43 @@ func navigate(cur any, segs []string) (float64, error) {
 	return navigate(child, segs[1:])
 }
 
-// navSelector 处理 group[K]/bucket[K] 键控数组查找。
+// navSelector 处理 name[token] 选择器，按解析顺序：
+//  1) group[键]/bucket[键] 语义糖：按键匹配（旧行为，零改动）。
+//  2) 字面 JSON-path：name 是当前节点的数组字段、token 是非负整数 → 按下标取元素
+//     （模型镜像工具结果 JSON 的自然写法，如 groups[1].data[0].avg_value）。
+//  3) 都不符合 → 明确报错（不静默走错）。
 func navSelector(cur any, name, key string, rest []string) (float64, error) {
-	cfg, ok := keyedArray[name]
-	if !ok {
-		return 0, fmt.Errorf("未知选择器 %q", name)
-	}
 	m, ok := cur.(map[string]any)
 	if !ok {
 		return 0, fmt.Errorf("选择器 %q 的父节点非对象", name)
 	}
-	arr, ok := m[cfg[0]].([]any)
-	if !ok {
-		return 0, fmt.Errorf("字段 %q 非数组", cfg[0])
-	}
-	for _, e := range arr {
-		em, ok := e.(map[string]any)
-		if ok && fmt.Sprint(em[cfg[1]]) == key {
-			return navigate(em, rest)
+	// 1) 语义糖（group/bucket）：按键值匹配数组元素。
+	if cfg, ok := keyedArray[name]; ok {
+		arr, ok := m[cfg[0]].([]any)
+		if !ok {
+			return 0, fmt.Errorf("字段 %q 非数组", cfg[0])
 		}
+		for _, e := range arr {
+			em, ok := e.(map[string]any)
+			if ok && fmt.Sprint(em[cfg[1]]) == key {
+				return navigate(em, rest)
+			}
+		}
+		return 0, fmt.Errorf("%s[%s] 未找到", name, key)
 	}
-	return 0, fmt.Errorf("%s[%s] 未找到", name, key)
+	// 2) 字面数组下标：当前节点存在同名数组字段，且 token 为非负整数。
+	if arr, ok := m[name].([]any); ok {
+		i, err := strconv.Atoi(key)
+		if err != nil {
+			return 0, fmt.Errorf("数组字段 %q 的下标须为整数，得到 %q", name, key)
+		}
+		if i < 0 || i >= len(arr) {
+			return 0, fmt.Errorf("%s[%d] 越界（共 %d 个元素）", name, i, len(arr))
+		}
+		return navigate(arr[i], rest)
+	}
+	// 3) 既非 group/bucket 糖，当前节点也无同名数组字段。
+	return 0, fmt.Errorf("未知选择器 %q（非 group/bucket 糖，且当前节点无同名数组字段）", name)
 }
 
 // toFloat 把 JSON 数值（统一 float64）转出；非数值返回 ok=false。

@@ -190,6 +190,7 @@ func TestEvalAnchor_Statuses(t *testing.T) {
 	}{
 		{"q2.group[EU].profile.mean", 3000, AttrResolved},
 		{"q2.group[EU].profile.mean", 9999, AttrMismatch},
+		{"q2.groups[0].profile.mean", 3000, AttrResolved}, // 字面下标整链路 resolved
 		{"ratio(q2.group[EU].profile.mean, q2.group[US].profile.mean)", 2.0, AttrResolved},
 		{"q2.group[ZZ].profile.mean", 1, AttrUnresolvable},
 		{"harmonic_mean(q1.profile.mean, q1.profile.median)", 1, AttrDerivUnsupported},
@@ -224,5 +225,65 @@ func TestAttributionRate(t *testing.T) {
 	}
 	if got := AttributionRate(nil); got != 0 {
 		t.Fatalf("空集 rate 应为 0，得到 %v", got)
+	}
+}
+
+// groupsWithDataCalls 构造组内带 Data 的结果，复现模型镜像 JSON 的自然锚
+// （groups[i].data[j].avg_value）。单 call → q1。
+func groupsWithDataCalls() []contract.ToolCall {
+	return []contract.ToolCall{
+		{Name: "analyze", Response: contract.Response{
+			Status: contract.StatusOK,
+			Groups: []contract.GroupProfile{
+				{Group: "EU", Profile: contract.DistProfile{Count: 600, Mean: 3000}, Data: []contract.BucketRow{
+					{Bucket: "0-500", AvgValue: 250},
+					{Bucket: "500-1000", AvgValue: 750},
+				}},
+				{Group: "US", Profile: contract.DistProfile{Count: 400, Mean: 1500}, Data: []contract.BucketRow{
+					{Bucket: "0-500", AvgValue: 300},
+				}},
+			},
+			Data: []contract.BucketRow{
+				{Bucket: "top", AvgValue: 9000, PctPlayers: 0.05},
+			},
+		}},
+	}
+}
+
+func TestResolve_LiteralArrayIndex(t *testing.T) {
+	calls := groupsWithDataCalls()
+	cases := []struct {
+		path string
+		want float64
+	}{
+		{"q1.groups[0].profile.mean", 3000},
+		{"q1.groups[1].profile.mean", 1500},
+		{"q1.groups[0].data[1].avg_value", 750},
+		{"q1.groups[1].data[0].avg_value", 300},
+		{"q1.data[0].avg_value", 9000},
+		{"q1.data[0].pct_players", 0.05},
+	}
+	for _, c := range cases {
+		got, err := Resolve(calls, c.path)
+		if err != nil {
+			t.Errorf("%s: 意外报错 %v", c.path, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: got %v want %v", c.path, got, c.want)
+		}
+	}
+}
+
+func TestResolve_LiteralArrayIndex_Bad(t *testing.T) {
+	calls := groupsWithDataCalls()
+	for _, path := range []string{
+		"q1.groups[9].profile.mean",
+		"q1.groups[EU].profile.mean",
+		"q1.data[5].avg_value",
+	} {
+		if _, err := Resolve(calls, path); err == nil {
+			t.Errorf("%s: 应报错（不可解析）", path)
+		}
 	}
 }
