@@ -9,6 +9,12 @@ provider: minimax
 endpoint: https://api.minimax.io/v1/text/chatcompletion_v2
 model: MiniMax-M2.7
 
+# format 选择 wire 协议（省略 / "openai" = OpenAI chat-completions，默认、向后兼容；
+# "anthropic" = Anthropic Messages API，发 x-api-key + anthropic-version 头、解析 content[].text）。
+# 用于经 Anthropic 兼容网关（如某些第三方代理）转发的 key——这类 key 走 Anthropic 协议，
+# 用 OpenAI 格式打过去网关会回空 message。此时 endpoint 改 .../v1/messages、format 设 anthropic。
+# format: anthropic
+
 # api_key_env names the environment variable that holds your API key.
 # This is the recommended approach — the file stays safe to commit.
 api_key_env: MINIMAX_API_KEY
