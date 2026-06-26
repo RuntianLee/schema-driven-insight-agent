@@ -30,6 +30,7 @@ type dcTableRow struct {
 	Expect    map[string]float64 `yaml:"expect"`     // 按列名（别名）断言：确定性 mock 道用
 	ExpectPos map[int]float64    `yaml:"expect_pos"` // 按列绝对位置断言：真 LLM 道别名鲁棒（agent 自选 as 别名时仍可比对）
 	ExpectAny []dcTableExpectAny `yaml:"expect_any"` // 候选列名任一命中即可，避免 count 等前置列造成列序误判
+	SingleRow bool               `yaml:"single_row"` // 断言唯一行：聚合 shape 无区分列可 match 时用
 }
 
 type dcTableExpectAny struct {
@@ -216,12 +217,18 @@ func checkTable(tr *contract.TableResult, want dcTableRow) []string {
 	if tr == nil {
 		return []string{"Table 为空，无法断言"}
 	}
-	if len(want.Match) == 0 {
-		return []string{"table 断言缺少 match（空 match 会误配首行）"}
-	}
 	idx := make(map[string]int, len(tr.Columns))
 	for i, c := range tr.Columns {
 		idx[c.Name] = i
+	}
+	if want.SingleRow {
+		if len(tr.Rows) != 1 {
+			return []string{fmt.Sprintf("single_row 期望恰好 1 行，得 %d 行", len(tr.Rows))}
+		}
+		return checkTableExpect(tr.Rows[0], idx, map[string]string{"row": "single"}, want.Expect, want.ExpectPos, want.ExpectAny)
+	}
+	if len(want.Match) == 0 {
+		return []string{"table 断言缺少 match（空 match 会误配首行）"}
 	}
 	for _, row := range tr.Rows {
 		if tableRowMatches(row, idx, want.Match) {

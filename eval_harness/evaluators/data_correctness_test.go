@@ -305,3 +305,44 @@ table:
 		t.Fatalf("expected any matching analyze response to satisfy spec, got %+v", score)
 	}
 }
+
+func TestDataCorrectness_SingleRowAddressesSoleRow(t *testing.T) {
+	tr := &contract.TableResult{
+		Columns: []contract.ColumnMeta{{Name: "total"}, {Name: "churned"}},
+		Rows:    [][]any{{int64(30), int64(18)}},
+	}
+	t.Run("聚合单行按列名通过", func(t *testing.T) {
+		fails := checkTable(tr, dcTableRow{
+			SingleRow: true,
+			ExpectAny: []dcTableExpectAny{
+				{Columns: []string{"total", "count", "n"}, Value: 30},
+				{Columns: []string{"churned", "sum_Exited"}, Value: 18},
+			},
+		})
+		if len(fails) != 0 {
+			t.Fatalf("expect pass, got fails: %v", fails)
+		}
+	})
+	t.Run("错值失败", func(t *testing.T) {
+		fails := checkTable(tr, dcTableRow{
+			SingleRow: true,
+			ExpectAny: []dcTableExpectAny{{Columns: []string{"churned"}, Value: 999}},
+		})
+		if len(fails) == 0 {
+			t.Fatal("expect fail on wrong value")
+		}
+	})
+	t.Run("多行时失败报行数", func(t *testing.T) {
+		multi := &contract.TableResult{
+			Columns: []contract.ColumnMeta{{Name: "Exited"}, {Name: "n"}},
+			Rows:    [][]any{{int64(0), int64(12)}, {int64(1), int64(18)}},
+		}
+		fails := checkTable(multi, dcTableRow{
+			SingleRow: true,
+			ExpectAny: []dcTableExpectAny{{Columns: []string{"n"}, Value: 12}},
+		})
+		if len(fails) == 0 || !strings.Contains(strings.Join(fails, ";"), "2 行") {
+			t.Fatalf("expect fail mentioning 实际行数, got: %v", fails)
+		}
+	})
+}
