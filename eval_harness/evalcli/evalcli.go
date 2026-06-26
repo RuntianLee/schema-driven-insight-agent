@@ -132,11 +132,19 @@ func runPass(
 		distTool := tools.NewDistributionTool(schema, db)
 		reg := tools.NewRegistry()
 		reg.Register("query_distribution", func(ctx context.Context, args map[string]any) (contract.Response, error) {
-			return distTool.Run(ctx, tools.ArgsToQueryDistributionInput(args)), nil
+			in, errResp := tools.ParseQueryDistributionArgs(args)
+			if errResp != nil {
+				return *errResp, nil
+			}
+			return distTool.Run(ctx, in), nil
 		})
 		analyzeTool := tools.NewAnalyzeTool(schema, db)
 		reg.Register("analyze", func(ctx context.Context, args map[string]any) (contract.Response, error) {
-			return analyzeTool.Run(ctx, tools.ArgsToAnalyzeInput(args)), nil
+			in, errResp := tools.ParseAnalyzeArgs(args)
+			if errResp != nil {
+				return *errResp, nil
+			}
+			return analyzeTool.Run(ctx, in), nil
 		})
 
 		evalReg := evaluators.NewRegistry()
