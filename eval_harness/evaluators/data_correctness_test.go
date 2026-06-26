@@ -346,3 +346,65 @@ func TestDataCorrectness_SingleRowAddressesSoleRow(t *testing.T) {
 		}
 	})
 }
+
+func TestDataCorrectness_AnyOfPassesEitherShape(t *testing.T) {
+	groupByResp := contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+		Columns: []contract.ColumnMeta{{Name: "Exited"}, {Name: "n"}},
+		Rows:    [][]any{{int64(0), int64(12)}, {int64(1), int64(18)}},
+	}}
+	aggResp := contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+		Columns: []contract.ColumnMeta{{Name: "total"}, {Name: "churned"}},
+		Rows:    [][]any{{int64(30), int64(18)}},
+	}}
+	spec := specNode(t, `
+tool: analyze
+expect_status: OK
+any_of:
+  - table:
+    - match: {Exited: "0"}
+      expect_any: [{columns: ["n","count"], value: 12}]
+    - match: {Exited: "1"}
+      expect_any: [{columns: ["n","count"], value: 18}]
+  - table:
+    - single_row: true
+      expect_any:
+        - {columns: ["total","count","n"], value: 30}
+        - {columns: ["churned","sum_Exited"], value: 18}
+`)
+	for name, resp := range map[string]contract.Response{"group_by": groupByResp, "aggregate": aggResp} {
+		res := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: resp}}}
+		s, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+		if err != nil {
+			t.Fatalf("%s: evaluate err %v", name, err)
+		}
+		if !s.Pass {
+			t.Fatalf("%s shape should pass via any_of, got %+v", name, s)
+		}
+	}
+}
+
+func TestDataCorrectness_AnyOfFailsWhenAllBranchesWrong(t *testing.T) {
+	resp := contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+		Columns: []contract.ColumnMeta{{Name: "total"}, {Name: "churned"}},
+		Rows:    [][]any{{int64(99), int64(99)}},
+	}}
+	spec := specNode(t, `
+tool: analyze
+expect_status: OK
+any_of:
+  - table:
+    - match: {Exited: "1"}
+      expect_any: [{columns: ["n"], value: 18}]
+  - table:
+    - single_row: true
+      expect_any: [{columns: ["churned"], value: 18}]
+`)
+	res := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: resp}}}
+	s, _ := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+	if s.Pass {
+		t.Fatal("all branches wrong → must fail")
+	}
+	if !strings.Contains(s.Detail, "any_of 全分支未过") || !strings.Contains(s.Detail, "分支1") || !strings.Contains(s.Detail, "分支2") {
+		t.Fatalf("detail must render all branch fails, got: %q", s.Detail)
+	}
+}

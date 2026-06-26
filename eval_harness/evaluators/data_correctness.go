@@ -38,6 +38,13 @@ type dcTableExpectAny struct {
 	Value   float64  `yaml:"value"`
 }
 
+type dcAltBlock struct {
+	Table   []dcTableRow       `yaml:"table"`
+	Rows    []dcRow            `yaml:"rows"`
+	Groups  []dcGroup          `yaml:"groups"`
+	Profile map[string]float64 `yaml:"profile"`
+}
+
 type dcSpec struct {
 	Tool         string             `yaml:"tool"`
 	ExpectStatus string             `yaml:"expect_status"`
@@ -45,6 +52,7 @@ type dcSpec struct {
 	Rows         []dcRow            `yaml:"rows"`
 	Groups       []dcGroup          `yaml:"groups"`
 	Table        []dcTableRow       `yaml:"table"`
+	AnyOf        []dcAltBlock       `yaml:"any_of"`
 }
 
 // DataCorrectness 是确定性 evaluator：对真实 tool 返回逐字段比对（spec §4.2）。
@@ -85,6 +93,9 @@ func checkResponse(resp contract.Response, sp dcSpec) []string {
 	if sp.Profile != nil {
 		fails = append(fails, checkProfile(resp.Profile, sp.Profile)...)
 	}
+	if len(sp.AnyOf) > 0 {
+		return append(fails, checkAnyOf(resp, sp.AnyOf)...)
+	}
 	for _, r := range sp.Rows {
 		fails = append(fails, checkRows(resp.Data, r)...)
 	}
@@ -92,6 +103,37 @@ func checkResponse(resp contract.Response, sp dcSpec) []string {
 		fails = append(fails, checkGroup(resp.Groups, g)...)
 	}
 	for _, tr := range sp.Table {
+		fails = append(fails, checkTable(resp.Table, tr)...)
+	}
+	return fails
+}
+
+// checkAnyOf 任一分支零 fail → 整体过（返回 nil）；全分支失败 → 渲染各分支明细。
+func checkAnyOf(resp contract.Response, blocks []dcAltBlock) []string {
+	var rendered []string
+	for i, b := range blocks {
+		bf := checkAltBlock(resp, b)
+		if len(bf) == 0 {
+			return nil
+		}
+		rendered = append(rendered, fmt.Sprintf("[分支%d: %s]", i+1, strings.Join(bf, "; ")))
+	}
+	return []string{"any_of 全分支未过: " + strings.Join(rendered, " | ")}
+}
+
+// checkAltBlock 复用既有 table/rows/groups/profile 检查（不含 tool/expect_status/any_of）。
+func checkAltBlock(resp contract.Response, b dcAltBlock) []string {
+	var fails []string
+	if b.Profile != nil {
+		fails = append(fails, checkProfile(resp.Profile, b.Profile)...)
+	}
+	for _, r := range b.Rows {
+		fails = append(fails, checkRows(resp.Data, r)...)
+	}
+	for _, g := range b.Groups {
+		fails = append(fails, checkGroup(resp.Groups, g)...)
+	}
+	for _, tr := range b.Table {
 		fails = append(fails, checkTable(resp.Table, tr)...)
 	}
 	return fails
