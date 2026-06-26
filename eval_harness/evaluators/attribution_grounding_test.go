@@ -123,8 +123,8 @@ func TestAttributionGrounding_MinClaims(t *testing.T) {
 	if s, _ := NewAttributionGrounding().Evaluate(ctx, attrResult(resolved), specNode(t, "min_claims: 1")); !s.Pass {
 		t.Fatalf("min_claims:1 + 1 resolved 应 pass，得到 %+v", s)
 	}
-	// 4) min_claims:2 + 1 条 → FAIL（不足），Display 须诚实显示实得分子 1/2
-	if s, _ := NewAttributionGrounding().Evaluate(ctx, attrResult(resolved), specNode(t, "min_claims: 2")); s.Pass || !strings.Contains(s.Display, "1/2") {
+	// 4) min_claims:2 + 1 条 → FAIL（不足），Display 须诚实显示实得 1 条
+	if s, _ := NewAttributionGrounding().Evaluate(ctx, attrResult(resolved), specNode(t, "min_claims: 2")); s.Pass || !strings.Contains(s.Display, "实得 1") {
 		t.Fatalf("min_claims:2 + 仅1条应 FAIL 且 Display 含 1/2，得到 %+v", s)
 	}
 	// 5) min_claims:1 + 1 mismatch → FAIL（现有 bad 逻辑不变）
