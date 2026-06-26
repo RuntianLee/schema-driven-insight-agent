@@ -30,11 +30,19 @@ type dcTableRow struct {
 	Expect    map[string]float64 `yaml:"expect"`     // 按列名（别名）断言：确定性 mock 道用
 	ExpectPos map[int]float64    `yaml:"expect_pos"` // 按列绝对位置断言：真 LLM 道别名鲁棒（agent 自选 as 别名时仍可比对）
 	ExpectAny []dcTableExpectAny `yaml:"expect_any"` // 候选列名任一命中即可，避免 count 等前置列造成列序误判
+	SingleRow bool               `yaml:"single_row"` // 断言唯一行：聚合 shape 无区分列可 match 时用
 }
 
 type dcTableExpectAny struct {
 	Columns []string `yaml:"columns"`
 	Value   float64  `yaml:"value"`
+}
+
+type dcAltBlock struct {
+	Table   []dcTableRow       `yaml:"table"`
+	Rows    []dcRow            `yaml:"rows"`
+	Groups  []dcGroup          `yaml:"groups"`
+	Profile map[string]float64 `yaml:"profile"`
 }
 
 type dcSpec struct {
@@ -44,6 +52,7 @@ type dcSpec struct {
 	Rows         []dcRow            `yaml:"rows"`
 	Groups       []dcGroup          `yaml:"groups"`
 	Table        []dcTableRow       `yaml:"table"`
+	AnyOf        []dcAltBlock       `yaml:"any_of"`
 }
 
 // DataCorrectness 是确定性 evaluator：对真实 tool 返回逐字段比对（spec §4.2）。
@@ -58,6 +67,9 @@ func (d *DataCorrectness) Evaluate(_ context.Context, res TaskResult, spec *yaml
 	var sp dcSpec
 	if err := spec.Decode(&sp); err != nil {
 		return Score{}, fmt.Errorf("decode data_correctness spec: %w", err)
+	}
+	if err := validateSpec(sp); err != nil {
+		return Score{}, err
 	}
 	responses := findToolResponses(res, sp.Tool)
 	if len(responses) == 0 {
@@ -76,6 +88,38 @@ func (d *DataCorrectness) Evaluate(_ context.Context, res TaskResult, spec *yaml
 	return fail(d.Name(), strings.Join(allFails, " | ")), nil
 }
 
+// validateSpec 对互斥/退化配置 fail-fast：any_of 与顶层 table/rows/groups 互斥；
+// 同一 table 行内 single_row 与 match 互斥（single_row 已断言唯一行，match 多余且冲突）。
+// 注意：顶层 expect_status / profile 是「强制前置条件」，不进入 any_of 的 OR 逻辑——
+// 即便某分支通过，前置条件失败整体仍 FAIL（见 checkResponse）；dcAltBlock 内的 profile 才参与 OR。
+func validateSpec(sp dcSpec) error {
+	if len(sp.AnyOf) > 0 && (len(sp.Table) > 0 || len(sp.Rows) > 0 || len(sp.Groups) > 0) {
+		return fmt.Errorf("data_correctness: any_of 与顶层 table/rows/groups 互斥")
+	}
+	for i, b := range sp.AnyOf {
+		if len(b.Table) == 0 && len(b.Rows) == 0 && len(b.Groups) == 0 && b.Profile == nil {
+			return fmt.Errorf("data_correctness: any_of[%d] 为空分支（无任何断言）", i)
+		}
+	}
+	checkTableRows := func(rows []dcTableRow) error {
+		for _, r := range rows {
+			if r.SingleRow && len(r.Match) > 0 {
+				return fmt.Errorf("data_correctness: single_row 与 match 互斥")
+			}
+		}
+		return nil
+	}
+	if err := checkTableRows(sp.Table); err != nil {
+		return err
+	}
+	for _, b := range sp.AnyOf {
+		if err := checkTableRows(b.Table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func checkResponse(resp contract.Response, sp dcSpec) []string {
 	var fails []string
 	if sp.ExpectStatus != "" && string(resp.Status) != sp.ExpectStatus {
@@ -84,6 +128,9 @@ func checkResponse(resp contract.Response, sp dcSpec) []string {
 	if sp.Profile != nil {
 		fails = append(fails, checkProfile(resp.Profile, sp.Profile)...)
 	}
+	if len(sp.AnyOf) > 0 {
+		return append(fails, checkAnyOf(resp, sp.AnyOf)...)
+	}
 	for _, r := range sp.Rows {
 		fails = append(fails, checkRows(resp.Data, r)...)
 	}
@@ -91,6 +138,37 @@ func checkResponse(resp contract.Response, sp dcSpec) []string {
 		fails = append(fails, checkGroup(resp.Groups, g)...)
 	}
 	for _, tr := range sp.Table {
+		fails = append(fails, checkTable(resp.Table, tr)...)
+	}
+	return fails
+}
+
+// checkAnyOf 任一分支零 fail → 整体过（返回 nil）；全分支失败 → 渲染各分支明细。
+func checkAnyOf(resp contract.Response, blocks []dcAltBlock) []string {
+	var rendered []string
+	for i, b := range blocks {
+		bf := checkAltBlock(resp, b)
+		if len(bf) == 0 {
+			return nil
+		}
+		rendered = append(rendered, fmt.Sprintf("[分支%d: %s]", i+1, strings.Join(bf, "; ")))
+	}
+	return []string{"any_of 全分支未过: " + strings.Join(rendered, " | ")}
+}
+
+// checkAltBlock 复用既有 table/rows/groups/profile 检查（不含 tool/expect_status/any_of）。
+func checkAltBlock(resp contract.Response, b dcAltBlock) []string {
+	var fails []string
+	if b.Profile != nil {
+		fails = append(fails, checkProfile(resp.Profile, b.Profile)...)
+	}
+	for _, r := range b.Rows {
+		fails = append(fails, checkRows(resp.Data, r)...)
+	}
+	for _, g := range b.Groups {
+		fails = append(fails, checkGroup(resp.Groups, g)...)
+	}
+	for _, tr := range b.Table {
 		fails = append(fails, checkTable(resp.Table, tr)...)
 	}
 	return fails
@@ -216,12 +294,18 @@ func checkTable(tr *contract.TableResult, want dcTableRow) []string {
 	if tr == nil {
 		return []string{"Table 为空，无法断言"}
 	}
-	if len(want.Match) == 0 {
-		return []string{"table 断言缺少 match（空 match 会误配首行）"}
-	}
 	idx := make(map[string]int, len(tr.Columns))
 	for i, c := range tr.Columns {
 		idx[c.Name] = i
+	}
+	if want.SingleRow {
+		if len(tr.Rows) != 1 {
+			return []string{fmt.Sprintf("single_row 期望恰好 1 行，得 %d 行", len(tr.Rows))}
+		}
+		return checkTableExpect(tr.Rows[0], idx, map[string]string{"row": "single"}, want.Expect, want.ExpectPos, want.ExpectAny)
+	}
+	if len(want.Match) == 0 {
+		return []string{"table 断言缺少 match（空 match 会误配首行）"}
 	}
 	for _, row := range tr.Rows {
 		if tableRowMatches(row, idx, want.Match) {

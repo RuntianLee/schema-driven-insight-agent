@@ -19,12 +19,21 @@ evaluators:
   data_correctness:
     tool: analyze
     expect_status: OK
-    table:
-      # 按列名（expect_any）而非绝对位置：agent 多算聚合时 count 列位置会变。
-      - match: {Exited: "0"}
-        expect_any: [{columns: ["n", "count", "customer_count", "cnt"], value: 12}]
-      - match: {Exited: "1"}
-        expect_any: [{columns: ["n", "count", "customer_count", "cnt"], value: 18}]
+    # any_of：任一 shape 全过即 PASS。agent 既可能产 group_by-Exited 桶行，也可能产
+    # ungrouped 聚合单行——两者都是合法正确算法，断言应同时接受（见诊断 T3 §11 分支 B）。
+    any_of:
+      # shape 1：金标准 group_by Exited（expect_any 按列名抗 count 前置列位移）
+      - table:
+        - match: {Exited: "0"}
+          expect_any: [{columns: ["n", "count", "customer_count", "cnt"], value: 12}]
+        - match: {Exited: "1"}
+          expect_any: [{columns: ["n", "count", "customer_count", "cnt"], value: 18}]
+      # shape 2：ungrouped 聚合单行（agent 实测 shape；rate 派生量不强断言降脆性）
+      - table:
+        - single_row: true
+          expect_any:
+            - {columns: ["total", "count", "n", "cnt"], value: 30}
+            - {columns: ["churned", "sum_Exited", "exited_sum", "exited"], value: 18}
   reasoning_quality:
     rubric: "按 5 项打分（满分 5）：(1)正确给出低信用分客户数（30）及流失/留存拆分（18/12）；(2)算出流失率 60%；(3)明确点明边界定义——信用分『严格小于 600』、开闭方向、口径可复现；(4)指出低信用分客群流失偏高；(5)给出结合风险评估的差异化挽留建议。"
     min_score: 5

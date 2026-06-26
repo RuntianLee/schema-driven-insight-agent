@@ -3,6 +3,7 @@ package evaluators
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -303,5 +304,213 @@ table:
 	}
 	if !score.Pass {
 		t.Fatalf("expected any matching analyze response to satisfy spec, got %+v", score)
+	}
+}
+
+func TestDataCorrectness_SingleRowAddressesSoleRow(t *testing.T) {
+	tr := &contract.TableResult{
+		Columns: []contract.ColumnMeta{{Name: "total"}, {Name: "churned"}},
+		Rows:    [][]any{{int64(30), int64(18)}},
+	}
+	t.Run("聚合单行按列名通过", func(t *testing.T) {
+		fails := checkTable(tr, dcTableRow{
+			SingleRow: true,
+			ExpectAny: []dcTableExpectAny{
+				{Columns: []string{"total", "count", "n"}, Value: 30},
+				{Columns: []string{"churned", "sum_Exited"}, Value: 18},
+			},
+		})
+		if len(fails) != 0 {
+			t.Fatalf("expect pass, got fails: %v", fails)
+		}
+	})
+	t.Run("错值失败", func(t *testing.T) {
+		fails := checkTable(tr, dcTableRow{
+			SingleRow: true,
+			ExpectAny: []dcTableExpectAny{{Columns: []string{"churned"}, Value: 999}},
+		})
+		if len(fails) == 0 {
+			t.Fatal("expect fail on wrong value")
+		}
+	})
+	t.Run("多行时失败报行数", func(t *testing.T) {
+		multi := &contract.TableResult{
+			Columns: []contract.ColumnMeta{{Name: "Exited"}, {Name: "n"}},
+			Rows:    [][]any{{int64(0), int64(12)}, {int64(1), int64(18)}},
+		}
+		fails := checkTable(multi, dcTableRow{
+			SingleRow: true,
+			ExpectAny: []dcTableExpectAny{{Columns: []string{"n"}, Value: 12}},
+		})
+		if len(fails) == 0 || !strings.Contains(strings.Join(fails, ";"), "2 行") {
+			t.Fatalf("expect fail mentioning 实际行数, got: %v", fails)
+		}
+	})
+}
+
+func TestDataCorrectness_AnyOfPassesEitherShape(t *testing.T) {
+	groupByResp := contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+		Columns: []contract.ColumnMeta{{Name: "Exited"}, {Name: "n"}},
+		Rows:    [][]any{{int64(0), int64(12)}, {int64(1), int64(18)}},
+	}}
+	aggResp := contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+		Columns: []contract.ColumnMeta{{Name: "total"}, {Name: "churned"}},
+		Rows:    [][]any{{int64(30), int64(18)}},
+	}}
+	spec := specNode(t, `
+tool: analyze
+expect_status: OK
+any_of:
+  - table:
+    - match: {Exited: "0"}
+      expect_any: [{columns: ["n","count"], value: 12}]
+    - match: {Exited: "1"}
+      expect_any: [{columns: ["n","count"], value: 18}]
+  - table:
+    - single_row: true
+      expect_any:
+        - {columns: ["total","count","n"], value: 30}
+        - {columns: ["churned","sum_Exited"], value: 18}
+`)
+	for name, resp := range map[string]contract.Response{"group_by": groupByResp, "aggregate": aggResp} {
+		res := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: resp}}}
+		s, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+		if err != nil {
+			t.Fatalf("%s: evaluate err %v", name, err)
+		}
+		if !s.Pass {
+			t.Fatalf("%s shape should pass via any_of, got %+v", name, s)
+		}
+	}
+}
+
+func TestDataCorrectness_AnyOfFailsWhenAllBranchesWrong(t *testing.T) {
+	resp := contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+		Columns: []contract.ColumnMeta{{Name: "total"}, {Name: "churned"}},
+		Rows:    [][]any{{int64(99), int64(99)}},
+	}}
+	spec := specNode(t, `
+tool: analyze
+expect_status: OK
+any_of:
+  - table:
+    - match: {Exited: "1"}
+      expect_any: [{columns: ["n"], value: 18}]
+  - table:
+    - single_row: true
+      expect_any: [{columns: ["churned"], value: 18}]
+`)
+	res := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: resp}}}
+	s, _ := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+	if s.Pass {
+		t.Fatal("all branches wrong → must fail")
+	}
+	if !strings.Contains(s.Detail, "any_of 全分支未过") || !strings.Contains(s.Detail, "分支1") || !strings.Contains(s.Detail, "分支2") {
+		t.Fatalf("detail must render all branch fails, got: %q", s.Detail)
+	}
+}
+
+func TestDataCorrectness_RejectsConflictingSpec(t *testing.T) {
+	res := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze",
+		Response: contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+			Columns: []contract.ColumnMeta{{Name: "n"}}, Rows: [][]any{{int64(1)}}}}}}}
+
+	t.Run("any_of 与顶层 table 互斥", func(t *testing.T) {
+		spec := specNode(t, `
+tool: analyze
+table:
+  - match: {Exited: "1"}
+    expect_any: [{columns: ["n"], value: 1}]
+any_of:
+  - table:
+    - single_row: true
+      expect_any: [{columns: ["n"], value: 1}]
+`)
+		_, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+		if err == nil {
+			t.Fatal("any_of + 顶层 table 应返回配置错误")
+		}
+	})
+
+	t.Run("single_row 与 match 互斥", func(t *testing.T) {
+		spec := specNode(t, `
+tool: analyze
+any_of:
+  - table:
+    - single_row: true
+      match: {Exited: "1"}
+      expect_any: [{columns: ["n"], value: 1}]
+`)
+		_, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+		if err == nil {
+			t.Fatal("single_row + match 应返回配置错误")
+		}
+	})
+
+	t.Run("空 any_of 分支被拒", func(t *testing.T) {
+		spec := specNode(t, `
+tool: analyze
+any_of:
+  - {}
+`)
+		_, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+		if err == nil {
+			t.Fatal("空 any_of 分支（无任何断言）应返回配置错误")
+		}
+	})
+}
+
+func TestDataCorrectness_CountChurnBothShapesRealValues(t *testing.T) {
+	cases := []struct {
+		name                          string
+		retain, churn, total, churned int64
+	}{
+		{"low_creditscore", 12, 18, 30, 18},
+		{"new_customer", 6, 14, 20, 14},
+		{"high_balance", 8, 12, 20, 12},
+	}
+	mkSpec := func(retain, churn, total, churned int64) *yaml.Node {
+		return specNode(t, fmt.Sprintf(`
+tool: analyze
+expect_status: OK
+any_of:
+  - table:
+    - match: {Exited: "0"}
+      expect_any: [{columns: ["n","count","customer_count","cnt"], value: %d}]
+    - match: {Exited: "1"}
+      expect_any: [{columns: ["n","count","customer_count","cnt"], value: %d}]
+  - table:
+    - single_row: true
+      expect_any:
+        - {columns: ["total","count","n","cnt"], value: %d}
+        - {columns: ["churned","sum_Exited","exited_sum","exited"], value: %d}
+`, retain, churn, total, churned))
+	}
+	for _, c := range cases {
+		spec := mkSpec(c.retain, c.churn, c.total, c.churned)
+		gb := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: contract.Response{
+			Status: contract.StatusOK, Table: &contract.TableResult{
+				Columns: []contract.ColumnMeta{{Name: "Exited"}, {Name: "n"}},
+				Rows:    [][]any{{int64(0), c.retain}, {int64(1), c.churn}},
+			}}}}}
+		if s, _ := NewDataCorrectness().Evaluate(context.Background(), gb, spec); !s.Pass {
+			t.Fatalf("%s group_by shape should pass, got %+v", c.name, s)
+		}
+		agg := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: contract.Response{
+			Status: contract.StatusOK, Table: &contract.TableResult{
+				Columns: []contract.ColumnMeta{{Name: "total"}, {Name: "sum_Exited"}},
+				Rows:    [][]any{{c.total, c.churned}},
+			}}}}}
+		if s, _ := NewDataCorrectness().Evaluate(context.Background(), agg, spec); !s.Pass {
+			t.Fatalf("%s aggregate shape should pass, got %+v", c.name, s)
+		}
+		bad := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: contract.Response{
+			Status: contract.StatusOK, Table: &contract.TableResult{
+				Columns: []contract.ColumnMeta{{Name: "total"}, {Name: "sum_Exited"}},
+				Rows:    [][]any{{c.total, c.churned + 1}},
+			}}}}}
+		if s, _ := NewDataCorrectness().Evaluate(context.Background(), bad, spec); s.Pass {
+			t.Fatalf("%s wrong churned should fail", c.name)
+		}
 	}
 }
