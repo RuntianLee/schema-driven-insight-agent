@@ -21,12 +21,13 @@ evaluators:
     tool: analyze
     expect_status: OK
     table:
+      # 按列名（expect_any）而非绝对位置：agent 多算聚合时 avg_salary 列位置会变。
       - match: {Geography: France}
-        expect_pos: {1: 100000}
+        expect_any: [{columns: ["avg_salary", "avg_estimatedsalary", "avg_estimated_salary", "avg_EstimatedSalary"], value: 100000}]
       - match: {Geography: Germany}
-        expect_pos: {1: 100000}
+        expect_any: [{columns: ["avg_salary", "avg_estimatedsalary", "avg_estimated_salary", "avg_EstimatedSalary"], value: 100000}]
       - match: {Geography: Spain}
-        expect_pos: {1: 100000}
+        expect_any: [{columns: ["avg_salary", "avg_estimatedsalary", "avg_estimated_salary", "avg_EstimatedSalary"], value: 100000}]
   reasoning_quality:
     rubric: "按 5 项打分（满分 5）：(1)正确给出各地域人均年薪均为 100000；(2)指出三者相等；(3)明确相等均值可能掩盖不同分布结构（同一均值可由不同分布产生）；(4)给出具体分布判断——应看离散度/分位而非只看均值，不能因均值相等就断定客群同质；(5)据此给审慎建议（需先看分布再决定是否分层运营）。"
     min_score: 5

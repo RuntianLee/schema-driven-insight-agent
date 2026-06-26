@@ -22,12 +22,13 @@ evaluators:
     tool: analyze
     expect_status: OK
     table:
+      # 按列名（expect_any）而非绝对位置：agent 多算聚合时 avg_cs 列位置会变。
       - match: {Geography: France}
-        expect_pos: {1: 650}
+        expect_any: [{columns: ["avg_cs", "avg_creditscore", "avg_credit_score", "avg_CreditScore"], value: 650}]
       - match: {Geography: Germany}
-        expect_pos: {1: 651}
+        expect_any: [{columns: ["avg_cs", "avg_creditscore", "avg_credit_score", "avg_CreditScore"], value: 651}]
       - match: {Geography: Spain}
-        expect_pos: {1: 651}
+        expect_any: [{columns: ["avg_cs", "avg_creditscore", "avg_credit_score", "avg_CreditScore"], value: 651}]
   reasoning_quality:
     rubric: "按 5 项打分（满分 5）：(1)正确给出各地域人均信用分；(2)指出三者差异极小（1 分内）；(3)明确不应据近似均值排序信用质量、避免过度解读噪声；(4)给出具体分布判断——应看低分段占比/离散度而非只看均值；(5)据此给审慎结论（信用质量无显著地域差，勿据此差异化授信）。"
     min_score: 5

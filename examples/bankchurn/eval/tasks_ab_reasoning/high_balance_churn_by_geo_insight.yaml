@@ -21,12 +21,13 @@ evaluators:
     tool: analyze
     expect_status: OK
     table:
+      # 按列名（expect_any）而非绝对位置：agent 多算聚合时 count 列位置会变。
       - match: {Geography: France}
-        expect_pos: {1: 30}
+        expect_any: [{columns: ["n", "count", "customer_count", "cnt"], value: 30}]
       - match: {Geography: Germany}
-        expect_pos: {1: 50}
+        expect_any: [{columns: ["n", "count", "customer_count", "cnt"], value: 50}]
       - match: {Geography: Spain}
-        expect_pos: {1: 20}
+        expect_any: [{columns: ["n", "count", "customer_count", "cnt"], value: 20}]
   reasoning_quality:
     rubric: "按 5 项打分（满分 5）：(1)正确给出各地域高余额流失客户数（德 50/法 30/西 20）；(2)指出德国最集中并量化；(3)明确把口径拆成可验证单步——先定义过滤群体（Balance>150k 且 Exited=1）、再按地域分组，说明二者独立避免相互污染；(4)指出仅看单一维度会掩盖结构（如不拆分组会漏掉地域集中度）；(5)给出按地域差异化的挽留/排查建议。"
     min_score: 5
