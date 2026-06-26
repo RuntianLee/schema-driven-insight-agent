@@ -20,10 +20,11 @@ evaluators:
     tool: analyze
     expect_status: OK
     table:
+      # 按列名（expect_any）而非绝对位置：agent 多算聚合时 count 列位置会变。
       - match: {Exited: "0"}
-        expect_pos: {1: 8}
+        expect_any: [{columns: ["n", "count", "customer_count", "cnt"], value: 8}]
       - match: {Exited: "1"}
-        expect_pos: {1: 12}
+        expect_any: [{columns: ["n", "count", "customer_count", "cnt"], value: 12}]
   reasoning_quality:
     rubric: "按 5 项打分（满分 5）：(1)正确给出高净值客户数（20）及流失/留存拆分（12/8）；(2)算出流失率 60%（12/20）；(3)明确点明边界定义——余额『严格大于 150000』、开闭方向（不含等于）、口径可复现可对比；(4)指出高净值客户流失代价高于普通客户、值得专门关注；(5)给出针对性挽留建议（人工触达/专属权益）。"
     min_score: 5
