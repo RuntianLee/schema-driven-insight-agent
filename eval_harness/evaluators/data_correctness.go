@@ -88,11 +88,18 @@ func (d *DataCorrectness) Evaluate(_ context.Context, res TaskResult, spec *yaml
 	return fail(d.Name(), strings.Join(allFails, " | ")), nil
 }
 
-// validateSpec 对互斥配置 fail-fast：any_of 与顶层 table/rows/groups 互斥；
+// validateSpec 对互斥/退化配置 fail-fast：any_of 与顶层 table/rows/groups 互斥；
 // 同一 table 行内 single_row 与 match 互斥（single_row 已断言唯一行，match 多余且冲突）。
+// 注意：顶层 expect_status / profile 是「强制前置条件」，不进入 any_of 的 OR 逻辑——
+// 即便某分支通过，前置条件失败整体仍 FAIL（见 checkResponse）；dcAltBlock 内的 profile 才参与 OR。
 func validateSpec(sp dcSpec) error {
 	if len(sp.AnyOf) > 0 && (len(sp.Table) > 0 || len(sp.Rows) > 0 || len(sp.Groups) > 0) {
 		return fmt.Errorf("data_correctness: any_of 与顶层 table/rows/groups 互斥")
+	}
+	for i, b := range sp.AnyOf {
+		if len(b.Table) == 0 && len(b.Rows) == 0 && len(b.Groups) == 0 && b.Profile == nil {
+			return fmt.Errorf("data_correctness: any_of[%d] 为空分支（无任何断言）", i)
+		}
 	}
 	checkTableRows := func(rows []dcTableRow) error {
 		for _, r := range rows {

@@ -446,6 +446,18 @@ any_of:
 			t.Fatal("single_row + match 应返回配置错误")
 		}
 	})
+
+	t.Run("空 any_of 分支被拒", func(t *testing.T) {
+		spec := specNode(t, `
+tool: analyze
+any_of:
+  - {}
+`)
+		_, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+		if err == nil {
+			t.Fatal("空 any_of 分支（无任何断言）应返回配置错误")
+		}
+	})
 }
 
 func TestDataCorrectness_CountChurnBothShapesRealValues(t *testing.T) {
