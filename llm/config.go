@@ -24,6 +24,9 @@ type MiniMaxConfig struct {
 	TimeoutSeconds int      `yaml:"timeout_seconds"`
 	MaxTokens      int      `yaml:"max_tokens"`  // 0 = 不发（保持现状）；>0 封顶生成，防慢响应/截断
 	Temperature    *float64 `yaml:"temperature"` // nil = 不发；设 0 = 确定性
+	// Format 选择 wire 格式："" / "openai" = OpenAI chat-completions（默认，向后兼容）；
+	// "anthropic" = Anthropic Messages API（x-api-key + anthropic-version 头）。
+	Format string `yaml:"format"`
 }
 
 // ParseMiniMaxConfig parses YAML bytes into MiniMaxConfig and applies defaults
@@ -46,6 +49,12 @@ func ParseMiniMaxConfig(b []byte) (MiniMaxConfig, error) {
 	}
 	if cfg.TimeoutSeconds <= 0 {
 		cfg.TimeoutSeconds = 60
+	}
+	// 校验 format 枚举（KnownFields 已拒未知字段，但合法字段的非法值仍需显式校验）。
+	switch cfg.Format {
+	case "", "openai", "anthropic":
+	default:
+		return MiniMaxConfig{}, fmt.Errorf("parse llm config: invalid format %q (want \"\", \"openai\", or \"anthropic\")", cfg.Format)
 	}
 	return cfg, nil
 }
@@ -74,5 +83,5 @@ func NewMiniMaxFromConfig(cfg MiniMaxConfig) (Client, error) {
 		return nil, err
 	}
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
-	return newMiniMaxFull(key, cfg.Model, cfg.Endpoint, timeout, cfg.MaxTokens, cfg.Temperature), nil
+	return newMiniMaxFull(key, cfg.Model, cfg.Endpoint, timeout, cfg.MaxTokens, cfg.Temperature, cfg.Format), nil
 }
