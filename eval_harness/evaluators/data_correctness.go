@@ -68,6 +68,9 @@ func (d *DataCorrectness) Evaluate(_ context.Context, res TaskResult, spec *yaml
 	if err := spec.Decode(&sp); err != nil {
 		return Score{}, fmt.Errorf("decode data_correctness spec: %w", err)
 	}
+	if err := validateSpec(sp); err != nil {
+		return Score{}, err
+	}
 	responses := findToolResponses(res, sp.Tool)
 	if len(responses) == 0 {
 		return fail(d.Name(), fmt.Sprintf("未找到 tool %q 的调用", sp.Tool)), nil
@@ -83,6 +86,31 @@ func (d *DataCorrectness) Evaluate(_ context.Context, res TaskResult, spec *yaml
 	}
 
 	return fail(d.Name(), strings.Join(allFails, " | ")), nil
+}
+
+// validateSpec 对互斥配置 fail-fast：any_of 与顶层 table/rows/groups 互斥；
+// 同一 table 行内 single_row 与 match 互斥（single_row 已断言唯一行，match 多余且冲突）。
+func validateSpec(sp dcSpec) error {
+	if len(sp.AnyOf) > 0 && (len(sp.Table) > 0 || len(sp.Rows) > 0 || len(sp.Groups) > 0) {
+		return fmt.Errorf("data_correctness: any_of 与顶层 table/rows/groups 互斥")
+	}
+	checkTableRows := func(rows []dcTableRow) error {
+		for _, r := range rows {
+			if r.SingleRow && len(r.Match) > 0 {
+				return fmt.Errorf("data_correctness: single_row 与 match 互斥")
+			}
+		}
+		return nil
+	}
+	if err := checkTableRows(sp.Table); err != nil {
+		return err
+	}
+	for _, b := range sp.AnyOf {
+		if err := checkTableRows(b.Table); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func checkResponse(resp contract.Response, sp dcSpec) []string {

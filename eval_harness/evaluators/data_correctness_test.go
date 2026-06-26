@@ -408,3 +408,41 @@ any_of:
 		t.Fatalf("detail must render all branch fails, got: %q", s.Detail)
 	}
 }
+
+func TestDataCorrectness_RejectsConflictingSpec(t *testing.T) {
+	res := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze",
+		Response: contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+			Columns: []contract.ColumnMeta{{Name: "n"}}, Rows: [][]any{{int64(1)}}}}}}}
+
+	t.Run("any_of 与顶层 table 互斥", func(t *testing.T) {
+		spec := specNode(t, `
+tool: analyze
+table:
+  - match: {Exited: "1"}
+    expect_any: [{columns: ["n"], value: 1}]
+any_of:
+  - table:
+    - single_row: true
+      expect_any: [{columns: ["n"], value: 1}]
+`)
+		_, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+		if err == nil {
+			t.Fatal("any_of + 顶层 table 应返回配置错误")
+		}
+	})
+
+	t.Run("single_row 与 match 互斥", func(t *testing.T) {
+		spec := specNode(t, `
+tool: analyze
+any_of:
+  - table:
+    - single_row: true
+      match: {Exited: "1"}
+      expect_any: [{columns: ["n"], value: 1}]
+`)
+		_, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+		if err == nil {
+			t.Fatal("single_row + match 应返回配置错误")
+		}
+	})
+}
