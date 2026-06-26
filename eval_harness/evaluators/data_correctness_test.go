@@ -3,6 +3,7 @@ package evaluators
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -445,4 +446,59 @@ any_of:
 			t.Fatal("single_row + match 应返回配置错误")
 		}
 	})
+}
+
+func TestDataCorrectness_CountChurnBothShapesRealValues(t *testing.T) {
+	cases := []struct {
+		name                          string
+		retain, churn, total, churned int64
+	}{
+		{"low_creditscore", 12, 18, 30, 18},
+		{"new_customer", 6, 14, 20, 14},
+		{"high_balance", 8, 12, 20, 12},
+	}
+	mkSpec := func(retain, churn, total, churned int64) *yaml.Node {
+		return specNode(t, fmt.Sprintf(`
+tool: analyze
+expect_status: OK
+any_of:
+  - table:
+    - match: {Exited: "0"}
+      expect_any: [{columns: ["n","count","customer_count","cnt"], value: %d}]
+    - match: {Exited: "1"}
+      expect_any: [{columns: ["n","count","customer_count","cnt"], value: %d}]
+  - table:
+    - single_row: true
+      expect_any:
+        - {columns: ["total","count","n","cnt"], value: %d}
+        - {columns: ["churned","sum_Exited","exited_sum","exited"], value: %d}
+`, retain, churn, total, churned))
+	}
+	for _, c := range cases {
+		spec := mkSpec(c.retain, c.churn, c.total, c.churned)
+		gb := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: contract.Response{
+			Status: contract.StatusOK, Table: &contract.TableResult{
+				Columns: []contract.ColumnMeta{{Name: "Exited"}, {Name: "n"}},
+				Rows:    [][]any{{int64(0), c.retain}, {int64(1), c.churn}},
+			}}}}}
+		if s, _ := NewDataCorrectness().Evaluate(context.Background(), gb, spec); !s.Pass {
+			t.Fatalf("%s group_by shape should pass, got %+v", c.name, s)
+		}
+		agg := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: contract.Response{
+			Status: contract.StatusOK, Table: &contract.TableResult{
+				Columns: []contract.ColumnMeta{{Name: "total"}, {Name: "sum_Exited"}},
+				Rows:    [][]any{{c.total, c.churned}},
+			}}}}}
+		if s, _ := NewDataCorrectness().Evaluate(context.Background(), agg, spec); !s.Pass {
+			t.Fatalf("%s aggregate shape should pass, got %+v", c.name, s)
+		}
+		bad := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: contract.Response{
+			Status: contract.StatusOK, Table: &contract.TableResult{
+				Columns: []contract.ColumnMeta{{Name: "total"}, {Name: "sum_Exited"}},
+				Rows:    [][]any{{c.total, c.churned + 1}},
+			}}}}}
+		if s, _ := NewDataCorrectness().Evaluate(context.Background(), bad, spec); s.Pass {
+			t.Fatalf("%s wrong churned should fail", c.name)
+		}
+	}
 }
