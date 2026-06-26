@@ -12,13 +12,13 @@ import (
 
 // AnalyzeInput 是 analyze 工具的输入（镜像 schema_protocol.AnalysisQuery）。
 type AnalyzeInput struct {
-	Table      string
-	Filters    []schema_protocol.Filter
-	GroupBy    []string
-	Aggregates []schema_protocol.Aggregate
-	Having     []schema_protocol.HavingCond
-	OrderBy    []schema_protocol.OrderKey
-	Limit      int
+	Table      string                       `json:"table"`
+	Filters    []schema_protocol.Filter     `json:"filters"`
+	GroupBy    []string                     `json:"group_by"`
+	Aggregates []schema_protocol.Aggregate  `json:"aggregates"`
+	Having     []schema_protocol.HavingCond `json:"having"`
+	OrderBy    []schema_protocol.OrderKey   `json:"order_by"`
+	Limit      int                          `json:"limit"`
 }
 
 // Query 把 AnalyzeInput 转换为 schema_protocol.AnalysisQuery，供内部及上层直接复用。
