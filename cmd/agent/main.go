@@ -100,12 +100,19 @@ func main() {
 	distTool := tools.NewDistributionTool(schema, bizDB)
 	registry := tools.NewRegistry()
 	registry.Register("query_distribution", func(ctx context.Context, args map[string]any) (contract.Response, error) {
-		in := tools.ArgsToQueryDistributionInput(args)
+		in, errResp := tools.ParseQueryDistributionArgs(args)
+		if errResp != nil {
+			return *errResp, nil
+		}
 		return distTool.Run(ctx, in), nil
 	})
 	analyzeTool := tools.NewAnalyzeTool(schema, bizDB)
 	registry.Register("analyze", func(ctx context.Context, args map[string]any) (contract.Response, error) {
-		return analyzeTool.Run(ctx, tools.ArgsToAnalyzeInput(args)), nil
+		in, errResp := tools.ParseAnalyzeArgs(args)
+		if errResp != nil {
+			return *errResp, nil
+		}
+		return analyzeTool.Run(ctx, in), nil
 	})
 
 	// ── 7. 构建 Runner ────────────────────────────────────────────────────
