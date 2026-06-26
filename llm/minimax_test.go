@@ -24,7 +24,7 @@ func TestMiniMaxCall_EmptyContentSurfacesError(t *testing.T) {
 		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":""}}],"usage":{"prompt_tokens":10,"completion_tokens":0},"base_resp":{"status_code":0,"status_msg":"success"}}`))
 	}))
 	defer srv.Close()
-	c := newMiniMaxFull("k", "MiniMax-M2.7", srv.URL, 5*time.Second, 0, nil)
+	c := newMiniMaxFull("k", "MiniMax-M2.7", srv.URL, 5*time.Second, 0, nil, "openai")
 	_, _, _, _, err := c.Call(context.Background(), "hi")
 	if err == nil {
 		t.Fatal("空 content 应返回错误（可诊断），而非静默空串")
@@ -40,7 +40,7 @@ func TestMiniMaxCall_ReasoningContentFallback(t *testing.T) {
 		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"[\"主张A\"]"}}],"usage":{"prompt_tokens":10,"completion_tokens":5},"base_resp":{"status_code":0}}`))
 	}))
 	defer srv.Close()
-	c := newMiniMaxFull("k", "MiniMax-M2.7", srv.URL, 5*time.Second, 0, nil)
+	c := newMiniMaxFull("k", "MiniMax-M2.7", srv.URL, 5*time.Second, 0, nil, "openai")
 	got, _, _, _, err := c.Call(context.Background(), "hi")
 	if err != nil {
 		t.Fatalf("有 reasoning_content 时应回退取用、不报错: %v", err)

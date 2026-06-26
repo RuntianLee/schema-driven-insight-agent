@@ -22,8 +22,9 @@ type minimaxClient struct {
 	model       string
 	endpoint    string
 	http        *http.Client
-	maxTokens   int      // 0 = 不发
+	maxTokens   int      // 0 = 不发（openai）；anthropic 时 <=0 默认 4096
 	temperature *float64 // nil = 不发
+	format      string   // "" / "openai" = OpenAI chat-completions；"anthropic" = Anthropic Messages
 }
 
 // NewMiniMax constructs a MiniMax M2.7 HTTP client (design-v3 §4 LLM Provider).
@@ -33,7 +34,7 @@ func NewMiniMax(apiKey, model string) Client {
 	if model == "" {
 		model = "MiniMax-M2.7"
 	}
-	return newMiniMaxFull(apiKey, model, minimaxEndpoint, 60*time.Second, 0, nil)
+	return newMiniMaxFull(apiKey, model, minimaxEndpoint, 60*time.Second, 0, nil, "openai")
 }
 
 // newMiniMaxFull is the internal constructor used by NewMiniMaxFromConfig.
@@ -41,7 +42,10 @@ func NewMiniMax(apiKey, model string) Client {
 // correct anchors based on typical MiniMax API conventions. Verify against the
 // official MiniMax docs before production use — fields may differ from actual API.
 // maxTokens<=0 / temperature==nil 时不发对应字段（保持现状）。
-func newMiniMaxFull(apiKey, model, endpoint string, timeout time.Duration, maxTokens int, temperature *float64) Client {
+func newMiniMaxFull(apiKey, model, endpoint string, timeout time.Duration, maxTokens int, temperature *float64, format string) Client {
+	if format == "" {
+		format = "openai"
+	}
 	return &minimaxClient{
 		apiKey:      apiKey,
 		model:       model,
@@ -49,6 +53,7 @@ func newMiniMaxFull(apiKey, model, endpoint string, timeout time.Duration, maxTo
 		http:        &http.Client{Timeout: timeout},
 		maxTokens:   maxTokens,
 		temperature: temperature,
+		format:      format,
 	}
 }
 
@@ -81,9 +86,19 @@ type chatResp struct {
 	} `json:"base_resp"`
 }
 
-// Call sends prompt to MiniMax and returns (response, tokIn, tokOut, costUSD, error).
-// Returns an error for non-2xx HTTP status or a non-zero base_resp.status_code.
+// Call dispatches by wire format: "anthropic" → Anthropic Messages API,
+// otherwise (""/"openai") → OpenAI chat-completions（保持现状，向后兼容）。
 func (c *minimaxClient) Call(ctx context.Context, prompt string) (string, int, int, float64, error) {
+	if c.format == "anthropic" {
+		return c.callAnthropic(ctx, prompt)
+	}
+	return c.callOpenAI(ctx, prompt)
+}
+
+// callOpenAI sends prompt to an OpenAI chat-completions endpoint and returns
+// (response, tokIn, tokOut, costUSD, error).
+// Returns an error for non-2xx HTTP status or a non-zero base_resp.status_code.
+func (c *minimaxClient) callOpenAI(ctx context.Context, prompt string) (string, int, int, float64, error) {
 	body, _ := json.Marshal(chatReq{
 		Model:       c.model,
 		Messages:    []message{{Role: "user", Content: prompt}},
