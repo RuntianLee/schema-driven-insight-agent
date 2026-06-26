@@ -20,7 +20,7 @@ evaluators:
     tool: analyze
     expect_status: OK
     # any_of：任一 shape 全过即 PASS。agent 既可能产 group_by-Exited 桶行，也可能产
-    # ungrouped 聚合单行——两者都是合法正确算法，断言应同时接受（见诊断 T3 §11 分支 B）。
+    # ungrouped 聚合单行——两者都是合法正确算法，断言应同时接受。
     any_of:
       # shape 1：金标准 group_by Exited（expect_any 按列名抗 count 前置列位移）
       - table:
