@@ -35,7 +35,7 @@ func (a *AttributionGrounding) Evaluate(_ context.Context, res TaskResult, spec 
 		// 要求产块却不足 → FAIL（治理缺块 skip-PASS，2026-06-26 T2 实测 40%）。
 		return Score{
 			Evaluator: a.Name(), Value: 0, Pass: false,
-			Display: fmt.Sprintf("%d/%d ✗（要求≥%d 条归因块）", n, sp.MinClaims, sp.MinClaims),
+			Display: fmt.Sprintf("实得 %d 条 ✗（要求≥%d 条归因块）", n, sp.MinClaims),
 			Detail:  "应产归因块的量化任务未产块/不足——缺块不再 skip-pass",
 		}, nil
 	}
