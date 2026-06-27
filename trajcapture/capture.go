@@ -54,10 +54,12 @@ func (c *Capture) ToolCalls() []contract.ToolCall { return c.toolCalls }
 func (c *Capture) Outcome() string                { return c.outcome }
 func (c *Capture) FinalOutput() string            { return c.finalOut }
 
-// AnalystResults 把捕获的工具调用转成带稳定 ID（q1,q2,…）的 AnalystResult，供 Advisor 引用。
+// AnalystResults 把捕获的**成功(OK)**工具调用转成带稳定 ID（q1,q2,…）的 AnalystResult，
+// 供 Advisor 引用。口径与 attribution.Resolve / advisor_grounding 统一（contract.OKCalls）。
 func (c *Capture) AnalystResults() []contract.AnalystResult {
-	out := make([]contract.AnalystResult, len(c.toolCalls))
-	for i, tc := range c.toolCalls {
+	ok := contract.OKCalls(c.toolCalls)
+	out := make([]contract.AnalystResult, len(ok))
+	for i, tc := range ok {
 		out[i] = contract.AnalystResult{ID: contract.AnalystResultID(i), Call: tc}
 	}
 	return out

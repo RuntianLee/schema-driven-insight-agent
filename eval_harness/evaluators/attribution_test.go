@@ -309,3 +309,40 @@ func TestResolve_LiteralArrayIndex_Bad(t *testing.T) {
 		}
 	}
 }
+
+// TestResolve_TableCell_NumericColumnIndex：模型镜像原始 JSON 写数字列下标 rows[i][j]，
+// 须与 rows[i].<列名> 等价（2026-06-27 (b') case iii：q2.table.rows[0][1]）。
+func TestResolve_TableCell_NumericColumnIndex(t *testing.T) {
+	calls := tableCalls()
+	cases := []struct {
+		path string
+		want float64
+	}{
+		{"q1.table.rows[1][1]", 8000.0},       // 单段双下标：第1行第1列(avg_money)
+		{"q1.table.rows[0][0]", 1.0},          // 第0行第0列(server_id)
+		{"q1.table.rows[1].1", 8000.0},        // 点分形式数字列位，等价
+		{"q1.table.row[1].avg_money", 8000.0}, // 列名形式仍工作（回归）
+	}
+	for _, c := range cases {
+		got, err := Resolve(calls, c.path)
+		if err != nil {
+			t.Errorf("%s: 意外报错 %v", c.path, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: got %v want %v", c.path, got, c.want)
+		}
+	}
+}
+
+func TestResolve_TableCell_NumericColumnIndex_Bad(t *testing.T) {
+	calls := tableCalls()
+	for _, path := range []string{
+		"q1.table.rows[0][9]", // 列下标越界
+		"q1.table.rows[9][0]", // 行下标越界
+	} {
+		if _, err := Resolve(calls, path); err == nil {
+			t.Errorf("%s: 应报错", path)
+		}
+	}
+}

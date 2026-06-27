@@ -38,9 +38,11 @@ func (a *AdvisorGrounding) Evaluate(_ context.Context, res TaskResult, spec *yam
 			Detail:    "无 AdvisoryDraft（流水线未跑 Advisor）",
 		}, nil
 	}
-	// 合法 ID 集 = q1..qN（N = 工具调用数），口径同 trajcapture.Capture.AnalystResults。
-	valid := make(map[string]bool, len(res.ToolCalls))
-	for i := range res.ToolCalls {
+	// 合法 ID 集 = q1..qN（N = **成功** 工具调用数），口径同 trajcapture.Capture.AnalystResults
+	// 与 attribution.Resolve（contract.OKCalls，2026-06-27 (b') 统一）。
+	ok := contract.OKCalls(res.ToolCalls)
+	valid := make(map[string]bool, len(ok))
+	for i := range ok {
 		valid[contract.AnalystResultID(i)] = true
 	}
 	n := len(res.Advisory.Items)
