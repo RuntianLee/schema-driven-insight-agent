@@ -29,6 +29,29 @@ var keyedArray = map[string][2]string{
 	"bucket": {"data", "bucket"},
 }
 
+// qNode 解析 q{N} 首段，返回该成功结果 Response 的通用 JSON 根（map/any）。
+// q{N} 用 contract.OKCalls 过滤后 1-based 定位（与 AnalystResults/advisor_grounding 同口径）。
+// Resolve（标量）与 resolveColumn（向量）共用此前缀逻辑（DRY）。
+func qNode(calls []contract.ToolCall, qseg string) (any, error) {
+	n, err := parseQ(qseg)
+	if err != nil {
+		return nil, err
+	}
+	ok := contract.OKCalls(calls)
+	if n < 1 || n > len(ok) {
+		return nil, fmt.Errorf("%s 越界（共 %d 个成功结果）", qseg, len(ok))
+	}
+	var cur any
+	b, err := json.Marshal(ok[n-1].Response)
+	if err != nil {
+		return nil, fmt.Errorf("序列化 Response 失败: %w", err)
+	}
+	if err := json.Unmarshal(b, &cur); err != nil {
+		return nil, fmt.Errorf("JSON 反序列化 Response 失败: %w", err)
+	}
+	return cur, nil
+}
+
 // Resolve 把单元格路径（q{N}.<导航>）解析成一个标量数值。
 // q{N} 用 contract.OKCalls 过滤后 1-based 定位（与 AnalystResults/advisor_grounding 同口径，
 // 2026-06-27 (b') 统一）；失败/重试调用不计数。
@@ -38,23 +61,9 @@ func Resolve(calls []contract.ToolCall, path string) (float64, error) {
 	if len(segs) < 2 {
 		return 0, fmt.Errorf("path 太短: %q", path)
 	}
-	n, err := parseQ(segs[0])
+	cur, err := qNode(calls, segs[0])
 	if err != nil {
 		return 0, err
-	}
-	// q{N} 只数 status=OK 的结果：SCHEMA_ERROR/INSUFFICIENT_DATA 等失败重试不计数，
-	// 否则一次 schema 重试就会把后续所有锚的编号顶偏（2026-06-25 T1 实证）。
-	ok := contract.OKCalls(calls)
-	if n < 1 || n > len(ok) {
-		return 0, fmt.Errorf("%s 越界（共 %d 个成功结果）", segs[0], len(ok))
-	}
-	var cur any
-	b, err := json.Marshal(ok[n-1].Response)
-	if err != nil {
-		return 0, fmt.Errorf("序列化 Response 失败: %w", err)
-	}
-	if err := json.Unmarshal(b, &cur); err != nil {
-		return 0, fmt.Errorf("JSON 反序列化 Response 失败: %w", err)
 	}
 	return navigate(cur, segs[1:])
 }
