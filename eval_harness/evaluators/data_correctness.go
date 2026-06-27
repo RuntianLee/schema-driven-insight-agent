@@ -114,6 +114,11 @@ func validateSpec(sp dcSpec) error {
 			if r.SingleRow && len(r.Match) > 0 {
 				return fmt.Errorf("data_correctness: single_row 与 match 互斥")
 			}
+			for _, b := range r.ExpectValues {
+				if len(b.Candidates) == 0 {
+					return fmt.Errorf("data_correctness: expect_values 的 bind 缺少 candidates")
+				}
+			}
 		}
 		return nil
 	}

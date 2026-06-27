@@ -598,6 +598,21 @@ any_of:
 	}
 }
 
+func TestDataCorrectness_ExpectValuesRejectsEmptyCandidates(t *testing.T) {
+	res := resultWith(contract.Response{Status: contract.StatusOK})
+	spec := specNode(t, `
+tool: query_distribution
+table:
+  - single_row: true
+    expect_values:
+      - {candidates: [], value: 20}
+`)
+	_, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+	if err == nil {
+		t.Fatal("expect_values 空 candidates 应返回配置错误")
+	}
+}
+
 func TestDataCorrectness_CountChurnBothShapesRealValues(t *testing.T) {
 	cases := []struct {
 		name                          string
