@@ -403,7 +403,7 @@ func checkTableExpectAny(row []any, idx map[string]int, match map[string]string,
 // checkExpectValues 两相断言：① 名字绑定相——候选列名存在则值必须匹配，否则 FAIL（不兜底）；
 // ② 值存在性兜底相——仅对候选列名全不存在的量，在本行某个「未被占用」的数值 cell 找等于 Value 的格子。
 // 名字命中和兜底命中共享 claimed 集，兜底量不得复用已占用 cell（distinct-cell）。
-// 只定位 cell、不碰值比对（守恒）。
+// 使用既有 floatEq 做值比对、不修改容差逻辑（守恒：只扩寻址、不改判定）。
 func checkExpectValues(row []any, idx map[string]int, match map[string]string, binds []dcValueBind) []string {
 	var fails []string
 	claimed := make(map[int]bool)
@@ -423,12 +423,13 @@ func checkExpectValues(row []any, idx map[string]int, match map[string]string, b
 			fails = append(fails, fmt.Sprintf("table%v.%s=%g want %g", match, col, got, b.Value))
 			continue
 		}
+		// 仅名字绑定成功（值正确）才占用 cell；名字相 FAIL 时该 cell 不占用，但整体已有 fail、兜底相无法翻案，故不影响判定。
 		claimed[i] = true
 	}
 	for _, b := range fallback {
 		i, found := firstUnclaimedValueCell(row, claimed, b.Value)
 		if !found {
-			fails = append(fails, fmt.Sprintf("table%v.expect_values 值 %g 未在未占用单元格出现（候选列名 %v 均不存在）", match, b.Value, b.Candidates))
+			fails = append(fails, fmt.Sprintf("table%v.expect_values 值 %g 未在未占用单元格出现（候选列名 %v 均不存在；行内未占用数值: %v）", match, b.Value, b.Candidates, unclaimedValues(row, claimed)))
 			continue
 		}
 		claimed[i] = true
@@ -457,6 +458,20 @@ func firstUnclaimedValueCell(row []any, claimed map[int]bool, v float64) (int, b
 		}
 	}
 	return 0, false
+}
+
+// unclaimedValues 收集本行未被 claimed 且可转数值的 cell 值，用于兜底失败时的排障信息。
+func unclaimedValues(row []any, claimed map[int]bool) []float64 {
+	var vals []float64
+	for i := range row {
+		if claimed[i] {
+			continue
+		}
+		if got, ok := cellToFloat(row[i]); ok {
+			vals = append(vals, got)
+		}
+	}
+	return vals
 }
 
 func cellToString(v any) string {
