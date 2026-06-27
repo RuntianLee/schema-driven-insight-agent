@@ -380,6 +380,63 @@ func TestResolveColumn_Bad(t *testing.T) {
 	}
 }
 
+// churnTableCalls：单 call（q1），table 含 total_customers / churned_count 两列三行。
+// 列 total_customers = [100, 200, 300]（和 600）；churned_count = [10, 40, 50]（和 100）。
+func churnTableCalls() []contract.ToolCall {
+	return []contract.ToolCall{
+		{Name: "analyze", Response: contract.Response{
+			Status: contract.StatusOK,
+			Table: &contract.TableResult{
+				Columns:  []contract.ColumnMeta{{Name: "total_customers"}, {Name: "churned_count"}},
+				Rows:     [][]any{{100.0, 10.0}, {200.0, 40.0}, {300.0, 50.0}},
+				RowCount: 3,
+			},
+		}},
+	}
+}
+
+func TestResolveAnchor_Nested(t *testing.T) {
+	calls := churnTableCalls()
+	cases := []struct {
+		anchor string
+		want   float64
+	}{
+		// 占比：第0行 total / 三行 total 之和 = 100/600
+		{"ratio(q1.table.rows[0][0], sum(q1.table.rows[0][0], q1.table.rows[1][0], q1.table.rows[2][0]))", 100.0 / 600.0},
+		// 两段差距：pct(churned0,total0) - pct(churned2,total2) = 10/100 - 50/300
+		{"diff(pct(q1.table.rows[0][1], q1.table.rows[0][0]), pct(q1.table.rows[2][1], q1.table.rows[2][0]))", 10.0/100.0 - 50.0/300.0},
+		// rows[*] 整列求和喂 sum
+		{"sum(q1.table.rows[*].churned_count)", 100.0},
+		// 嵌套 sum + rows[*]：总流失率 = 总churned / 总total = 100/600
+		{"ratio(sum(q1.table.rows[*].churned_count), sum(q1.table.rows[*].total_customers))", 100.0 / 600.0},
+	}
+	const ulpTol = 1e-14 // 仅吸收编译期常量 vs 运行时 float64 的末位差（~1e-17 量级），远小于业务容差
+	for _, c := range cases {
+		got, err := ResolveAnchor(calls, c.anchor)
+		if err != nil {
+			t.Errorf("%s: 意外报错 %v", c.anchor, err)
+			continue
+		}
+		diff := got - c.want
+		if diff < -ulpTol || diff > ulpTol {
+			t.Errorf("%s: got %.20f want %.20f (diff %e)", c.anchor, got, c.want, diff)
+		}
+	}
+}
+
+func TestResolveAnchor_NestedSafety(t *testing.T) {
+	calls := churnTableCalls()
+	for _, anchor := range []string{
+		"ratio(q1.table.rows[*].churned_count, q1.table.rows[*].total_customers)", // 向量喂定长算子 → 操作数非标量
+		"q1.table.rows[*].churned_count",                                          // 裸 rows[*]（不在算子内，走标量 Resolve）
+		"ratio(diff(1, q1.table.rows[0][0]), diff(q1.table.rows[1][0], q1.table.rows[2][0]), q1.table.rows[0][1])", // 真 arity 错：3 个操作数喂 ratio
+	} {
+		if _, err := ResolveAnchor(calls, anchor); err == nil {
+			t.Errorf("%s: 应报错（unresolvable）", anchor)
+		}
+	}
+}
+
 func TestSplitArgs_BracketAware(t *testing.T) {
 	cases := []struct {
 		in   string

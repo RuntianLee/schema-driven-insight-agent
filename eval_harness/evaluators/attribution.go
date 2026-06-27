@@ -368,10 +368,15 @@ func divide(a, b float64) (float64, error) {
 	return a / b, nil
 }
 
-// derivRe 匹配派生式 name(args)；args 内为逗号分隔的单元格路径（Phase 1 不支持嵌套括号）。
+// derivRe 匹配派生式 name(args)；args 由 splitArgs 括号感知切分，支持嵌套调用。
 var derivRe = regexp.MustCompile(`^([a-zA-Z_]+)\((.*)\)$`)
 
+// rowsStarPathRe 检测「裸路径」是否含 rows[*] 通配（用于操作数派发，非算子表达式）。
+var rowsStarPathRe = regexp.MustCompile(`rows?\[\*\]`)
+
 // ResolveAnchor 派发：派生式 name(...) → 解析操作数 + 应用算子；否则当单元格路径走 Resolve。
+// 操作数经 resolveOperand 求值，支持任意深度嵌套（操作数本身可为 name(...)）与
+// rows[*] 列向量（仅可喂变长算子）。
 func ResolveAnchor(calls []contract.ToolCall, anchor string) (float64, error) {
 	m := derivRe.FindStringSubmatch(strings.TrimSpace(anchor))
 	if m == nil {
@@ -382,21 +387,51 @@ func ResolveAnchor(calls []contract.ToolCall, anchor string) (float64, error) {
 		return 0, fmt.Errorf("%w: %s", errUnsupportedOp, m[1])
 	}
 	args := splitArgs(m[2])
-	if op.Arity >= 0 && len(args) != op.Arity {
-		return 0, fmt.Errorf("算子 %s 需 %d 个操作数，得到 %d", op.Name, op.Arity, len(args))
-	}
-	if op.Arity == -1 && len(args) == 0 {
+	if len(args) == 0 {
 		return 0, fmt.Errorf("算子 %s 需至少 1 个操作数", op.Name)
 	}
-	vals := make([]float64, len(args))
-	for i, a := range args {
-		v, err := Resolve(calls, strings.TrimSpace(a))
+	var vals []float64
+	for _, a := range args {
+		ov, err := resolveOperand(calls, a)
 		if err != nil {
 			return 0, fmt.Errorf("操作数 %q 不可解析: %w", a, err)
 		}
-		vals[i] = v
+		// 定长算子：每个操作数必须求成恰好 1 个标量（rows[*] 向量喂定长算子在此被拒）。
+		if op.Arity >= 0 && len(ov) != 1 {
+			return 0, fmt.Errorf("算子 %s 的操作数 %q 须为标量，得到 %d 个值", op.Name, a, len(ov))
+		}
+		vals = append(vals, ov...)
+	}
+	// 定长算子：操作数总数须等于 arity（变长拼接后由 Apply 自行处理）。
+	if op.Arity >= 0 && len(vals) != op.Arity {
+		return 0, fmt.Errorf("算子 %s 需 %d 个操作数，得到 %d", op.Name, op.Arity, len(vals))
 	}
 	return op.Apply(vals)
+}
+
+// resolveOperand 把一个操作数表达式求成标量向量（标量 → 单元素）：
+//  1) name(...) 形态 → 递归 ResolveAnchor（标量结果，支持任意深度嵌套）。
+//  2) 裸路径含 rows[*] → resolveColumn（列向量，仅变长算子可消费）。
+//  3) 否则 → Resolve（单元格标量）。
+//
+// 顺序保证 sum(rows[*].x) 这类「含 rows[*] 的算子」走 (1) 而非 (2)。
+func resolveOperand(calls []contract.ToolCall, expr string) ([]float64, error) {
+	expr = strings.TrimSpace(expr)
+	if derivRe.MatchString(expr) {
+		v, err := ResolveAnchor(calls, expr)
+		if err != nil {
+			return nil, err
+		}
+		return []float64{v}, nil
+	}
+	if rowsStarPathRe.MatchString(expr) {
+		return resolveColumn(calls, expr)
+	}
+	v, err := Resolve(calls, expr)
+	if err != nil {
+		return nil, err
+	}
+	return []float64{v}, nil
 }
 
 // splitArgs 按「顶层」逗号切分操作数：维护 () 与 [] 的嵌套深度，
