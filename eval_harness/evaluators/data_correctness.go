@@ -26,16 +26,24 @@ type dcGroup struct {
 }
 
 type dcTableRow struct {
-	Match     map[string]string  `yaml:"match"`
-	Expect    map[string]float64 `yaml:"expect"`     // 按列名（别名）断言：确定性 mock 道用
-	ExpectPos map[int]float64    `yaml:"expect_pos"` // 按列绝对位置断言：真 LLM 道别名鲁棒（agent 自选 as 别名时仍可比对）
-	ExpectAny []dcTableExpectAny `yaml:"expect_any"` // 候选列名任一命中即可，避免 count 等前置列造成列序误判
-	SingleRow bool               `yaml:"single_row"` // 断言唯一行：聚合 shape 无区分列可 match 时用
+	Match        map[string]string  `yaml:"match"`
+	Expect       map[string]float64 `yaml:"expect"`        // 按列名（别名）断言：确定性 mock 道用
+	ExpectPos    map[int]float64    `yaml:"expect_pos"`    // 按列绝对位置断言：真 LLM 道别名鲁棒（agent 自选 as 别名时仍可比对）
+	ExpectAny    []dcTableExpectAny `yaml:"expect_any"`    // 候选列名任一命中即可，避免 count 等前置列造成列序误判
+	ExpectValues []dcValueBind      `yaml:"expect_values"` // 名字优先、列名全不存在则按值兜底（(d'') 值存在性原语）
+	SingleRow    bool               `yaml:"single_row"`    // 断言唯一行：聚合 shape 无区分列可 match 时用
 }
 
 type dcTableExpectAny struct {
 	Columns []string `yaml:"columns"`
 	Value   float64  `yaml:"value"`
+}
+
+// dcValueBind 是 (d'') 值存在性原语的一个期望量：先按 Candidates 列名强绑定，
+// 候选列名一个都不存在于本行时退化为「Value 出现在本行某个未占用 cell」。
+type dcValueBind struct {
+	Candidates []string `yaml:"candidates"`
+	Value      float64  `yaml:"value"`
 }
 
 type dcAltBlock struct {
@@ -384,6 +392,55 @@ func checkTableExpectAny(row []any, idx map[string]int, match map[string]string,
 		tried = append(tried, fmt.Sprintf("%s=%g", col, got))
 	}
 	return []string{fmt.Sprintf("table%v.expect_any none of %v matched %g (tried %s)", match, expect.Columns, expect.Value, strings.Join(tried, ", "))}
+}
+
+// checkExpectValues 两相断言：① 名字绑定相——候选列名存在则值必须匹配，否则 FAIL（不兜底）；
+// ② 值存在性兜底相——仅对候选列名全不存在的量，在本行任意数值 cell 找等于 Value 的格子。
+// 只定位 cell、不碰值比对（守恒）。本 Task 先用朴素兜底，distinct-cell 是后续 Task。
+func checkExpectValues(row []any, idx map[string]int, match map[string]string, binds []dcValueBind) []string {
+	var fails []string
+	var fallback []dcValueBind
+	for _, b := range binds {
+		col, i, present := firstPresentCandidate(row, idx, b.Candidates)
+		if !present {
+			fallback = append(fallback, b)
+			continue
+		}
+		got, ok := cellToFloat(row[i])
+		if !ok {
+			fails = append(fails, fmt.Sprintf("table%v.%s 非数值", match, col))
+			continue
+		}
+		if !floatEq(got, b.Value) {
+			fails = append(fails, fmt.Sprintf("table%v.%s=%g want %g", match, col, got, b.Value))
+		}
+	}
+	for _, b := range fallback {
+		if !rowHasValue(row, b.Value) {
+			fails = append(fails, fmt.Sprintf("table%v.expect_values 值 %g 未出现（候选列名 %v 均不存在，按值兜底失败）", match, b.Value, b.Candidates))
+		}
+	}
+	return fails
+}
+
+// firstPresentCandidate 返回首个存在于本行的候选列名及其 cell 下标。
+func firstPresentCandidate(row []any, idx map[string]int, candidates []string) (string, int, bool) {
+	for _, c := range candidates {
+		if i, ok := idx[c]; ok && i < len(row) {
+			return c, i, true
+		}
+	}
+	return "", 0, false
+}
+
+// rowHasValue 报告本行是否有任一数值 cell 等于 v（后续 Task 将被 distinct-cell 版替换）。
+func rowHasValue(row []any, v float64) bool {
+	for i := range row {
+		if got, ok := cellToFloat(row[i]); ok && floatEq(got, v) {
+			return true
+		}
+	}
+	return false
 }
 
 func cellToString(v any) string {

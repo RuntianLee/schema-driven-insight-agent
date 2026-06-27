@@ -460,6 +460,52 @@ any_of:
 	})
 }
 
+func TestDataCorrectness_ExpectValuesNameBindingRegression(t *testing.T) {
+	row := []any{int64(20), int64(12)}
+	idx := map[string]int{"total": 0, "churned": 1}
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total", "n", "count"}, Value: 20},
+		{Candidates: []string{"churned", "exited"}, Value: 12},
+	})
+	if len(fails) != 0 {
+		t.Fatalf("已识别列名应强绑定通过，got: %v", fails)
+	}
+}
+
+func TestDataCorrectness_ExpectValuesExoticAliasFallbackPasses(t *testing.T) {
+	row := []any{int64(20), int64(12)}
+	idx := map[string]int{"total_count": 0, "churned_count": 1} // 候选集外别名
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total", "n", "count"}, Value: 20},
+		{Candidates: []string{"churned", "exited"}, Value: 12},
+	})
+	if len(fails) != 0 {
+		t.Fatalf("候选列名全不存在应按值兜底通过，got: %v", fails)
+	}
+}
+
+func TestDataCorrectness_ExpectValuesKnownColumnWrongValueFails(t *testing.T) {
+	row := []any{int64(99), int64(12)} // total 列存在但值错
+	idx := map[string]int{"total": 0, "churned": 1}
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total", "n"}, Value: 20},
+	})
+	if len(fails) == 0 {
+		t.Fatal("已识别列名值错应 FAIL（不兜底放水）")
+	}
+}
+
+func TestDataCorrectness_ExpectValuesExoticAliasWrongValueFails(t *testing.T) {
+	row := []any{int64(99), int64(99)} // 生僻别名且值不在行
+	idx := map[string]int{"total_count": 0, "churned_count": 1}
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total", "n"}, Value: 20},
+	})
+	if len(fails) == 0 {
+		t.Fatal("生僻别名且值不在行应 FAIL")
+	}
+}
+
 func TestDataCorrectness_CountChurnBothShapesRealValues(t *testing.T) {
 	cases := []struct {
 		name                          string
