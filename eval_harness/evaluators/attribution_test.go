@@ -347,6 +347,39 @@ func TestResolve_TableCell_NumericColumnIndex_Bad(t *testing.T) {
 	}
 }
 
+func TestResolveColumn_RowsWildcard(t *testing.T) {
+	calls := tableCalls() // 列 avg_money(列下标1) = [2000, 8000]
+	// 列名形式
+	got, err := resolveColumn(calls, "q1.table.rows[*].avg_money")
+	if err != nil {
+		t.Fatalf("列名形式意外报错: %v", err)
+	}
+	if len(got) != 2 || got[0] != 2000 || got[1] != 8000 {
+		t.Fatalf("got %v want [2000 8000]", got)
+	}
+	// 数字列下标形式
+	got2, err := resolveColumn(calls, "q1.table.rows[*][1]")
+	if err != nil {
+		t.Fatalf("数字列下标意外报错: %v", err)
+	}
+	if len(got2) != 2 || got2[0] != 2000 || got2[1] != 8000 {
+		t.Fatalf("got %v want [2000 8000]", got2)
+	}
+}
+
+func TestResolveColumn_Bad(t *testing.T) {
+	calls := tableCalls()
+	for _, path := range []string{
+		"q1.table.rows[*].nope", // 列名不存在
+		"q1.table.rows[*][9]",   // 列下标越界
+		"q9.table.rows[*][1]",   // q 越界
+	} {
+		if _, err := resolveColumn(calls, path); err == nil {
+			t.Errorf("%s: 应报错", path)
+		}
+	}
+}
+
 func TestSplitArgs_BracketAware(t *testing.T) {
 	cases := []struct {
 		in   string

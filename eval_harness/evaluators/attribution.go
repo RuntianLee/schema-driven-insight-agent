@@ -21,6 +21,12 @@ var selectorRe = regexp.MustCompile(`^([a-zA-Z_]+)\[(.+)\]$`)
 // （模型镜像原始 JSON 数组的自然写法，2026-06-27 (b') case iii）。
 var rowsIJRe = regexp.MustCompile(`^rows?\[(\d+)\]\[(\d+)\]$`)
 
+// rowsStarRe 匹配整列通配段 rows[*] / row[*]（列聚合，2026-06-27 (b'')）。
+var rowsStarRe = regexp.MustCompile(`^rows?\[\*\]$`)
+
+// rowsStarJRe 匹配单段整列通配+数字列下标 rows[*][j] / row[*][j]（2026-06-27 (b'')）。
+var rowsStarJRe = regexp.MustCompile(`^rows?\[\*\]\[(\d+)\]$`)
+
 // keyedArray 把选择器糖映射到「数组字段名 + 匹配字段名」：
 // group[K] = groups[] 里 group==K；bucket[K] = data[] 里 bucket==K。
 // 这是 Response 形状约定（2 条），不是字段枚举——新增统计字段无需改这里。
@@ -229,6 +235,95 @@ func tableCellByPos(row []any, i, j int) (float64, error) {
 		return f, nil
 	}
 	return 0, fmt.Errorf("单元格 [%d][%d] 非数值: %v", i, j, row[j])
+}
+
+// resolveColumn 解析含 rows[*] 的路径为一列标量向量（仅供变长算子如 sum 消费）。
+// 路径形如 q{N}.<...>.table.rows[*].<列名|数字列下标>。
+func resolveColumn(calls []contract.ToolCall, path string) ([]float64, error) {
+	segs := strings.Split(path, ".")
+	if len(segs) < 2 {
+		return nil, fmt.Errorf("path 太短: %q", path)
+	}
+	cur, err := qNode(calls, segs[0])
+	if err != nil {
+		return nil, err
+	}
+	return navColumn(cur, segs[1:])
+}
+
+// navColumn 沿通用 JSON 下行直到命中 table（含 columns+rows），再交 navTableColumn 取整列。
+func navColumn(cur any, segs []string) ([]float64, error) {
+	for i := 0; i < len(segs); i++ {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("段 %q 的父节点非对象", segs[i])
+		}
+		if _, hasCols := m["columns"]; hasCols {
+			if _, hasRows := m["rows"]; hasRows {
+				// 单段 rows[*][j] 形式：展开为两段 ["rows[*]", "j"] 交 navTableColumn。
+				tail := segs[i:]
+				if len(tail) == 1 {
+					if mm := rowsStarJRe.FindStringSubmatch(tail[0]); mm != nil {
+						return navTableColumn(m, []string{"rows[*]", mm[1]})
+					}
+				}
+				return navTableColumn(m, tail)
+			}
+		}
+		child, ok := m[segs[i]]
+		if !ok {
+			return nil, fmt.Errorf("字段 %q 不存在", segs[i])
+		}
+		cur = child
+	}
+	return nil, fmt.Errorf("路径未到达含 rows[*] 的 table: %v", segs)
+}
+
+// navTableColumn 从 table 取 rows[*].<col> 整列为 []float64。
+// segs 须为 [rows[*], <列名|数字列下标>]；任意行非数组/单元格非数值/列缺失/越界 → honest error。
+func navTableColumn(m map[string]any, segs []string) ([]float64, error) {
+	if len(segs) != 2 || !rowsStarRe.MatchString(segs[0]) {
+		return nil, fmt.Errorf("rows[*] 列聚合须为 rows[*].<列>，得到 %v", segs)
+	}
+	rows, ok := m["rows"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("table 缺少 rows 字段或类型错误")
+	}
+	col := segs[1]
+	j := -1
+	if idx, err := strconv.Atoi(col); err == nil {
+		j = idx
+	} else {
+		cols, _ := m["columns"].([]any)
+		for ci, c := range cols {
+			if cm, ok := c.(map[string]any); ok && fmt.Sprint(cm["name"]) == col {
+				j = ci
+				break
+			}
+		}
+		if j < 0 {
+			return nil, fmt.Errorf("列 %q 不存在", col)
+		}
+	}
+	out := make([]float64, 0, len(rows))
+	for i, r := range rows {
+		row, ok := r.([]any)
+		if !ok {
+			return nil, fmt.Errorf("第 %d 行非数组", i)
+		}
+		if j < 0 || j >= len(row) {
+			return nil, fmt.Errorf("列下标 %d 越界（行宽 %d）", j, len(row))
+		}
+		f, ok := toFloat(row[j])
+		if !ok {
+			return nil, fmt.Errorf("单元格 [%d][%d] 非数值: %v", i, j, row[j])
+		}
+		out = append(out, f)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("rows[*] 命中空列")
+	}
+	return out, nil
 }
 
 var errUnsupportedOp = errors.New("派生算子未注册")
