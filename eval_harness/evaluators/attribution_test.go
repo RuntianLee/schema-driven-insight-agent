@@ -463,3 +463,25 @@ func TestSplitArgs_BracketAware(t *testing.T) {
 		}
 	}
 }
+
+// TestEvalAnchor_Conservation_Nested 守恒不变量：嵌套/rows[*] 锚解析通后，
+// claimed 与真值不符仍必须判 AttrMismatch（查假数能力零回归）；相符判 AttrResolved。
+func TestEvalAnchor_Conservation_Nested(t *testing.T) {
+	calls := churnTableCalls() // 总流失率真值 = 100/600 ≈ 0.1667
+	cases := []struct {
+		anchor  string
+		claimed float64
+		want    AttrStatus
+	}{
+		{"ratio(sum(q1.table.rows[*].churned_count), sum(q1.table.rows[*].total_customers))", 100.0 / 600.0, AttrResolved},
+		{"ratio(sum(q1.table.rows[*].churned_count), sum(q1.table.rows[*].total_customers))", 0.5, AttrMismatch}, // 编造值仍被抓
+		{"sum(q1.table.rows[*].churned_count)", 100, AttrResolved},
+		{"sum(q1.table.rows[*].churned_count)", 999, AttrMismatch}, // 编造值仍被抓
+	}
+	for _, c := range cases {
+		v := EvalAnchor(calls, c.anchor, c.claimed, defaultAttrTol)
+		if v.Status != c.want {
+			t.Errorf("anchor=%q claimed=%v: got %s want %s", c.anchor, c.claimed, v.Status, c.want)
+		}
+	}
+}
