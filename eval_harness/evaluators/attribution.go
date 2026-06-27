@@ -17,6 +17,10 @@ import (
 // selectorRe 匹配 name[key] 形态选择器：group[EU] / bucket[500-1000] / row[3]。
 var selectorRe = regexp.MustCompile(`^([a-zA-Z_]+)\[(.+)\]$`)
 
+// rowsIJRe 匹配单段双下标 rows[i][j] / row[i][j]：数字行下标 + 数字列下标
+// （模型镜像原始 JSON 数组的自然写法，2026-06-27 (b') case iii）。
+var rowsIJRe = regexp.MustCompile(`^rows?\[(\d+)\]\[(\d+)\]$`)
+
 // keyedArray 把选择器糖映射到「数组字段名 + 匹配字段名」：
 // group[K] = groups[] 里 group==K；bucket[K] = data[] 里 bucket==K。
 // 这是 Response 形状约定（2 条），不是字段枚举——新增统计字段无需改这里。
@@ -143,43 +147,79 @@ func toFloat(v any) (float64, bool) {
 	return f, ok
 }
 
-// navTableCell 消费 row[i].<col> 两段：rows[i] 取行，columns 把列名映射到列下标。
+// navTableCell 解析 table 单元格。支持三种列位写法（数字下标与列名同权）：
+//   rows[i].<列名>（两段，列名）/ rows[i].<j>（两段，数字列下标）/ rows[i][j]（单段，数字列下标）。
+// 接受 row[i]（关键字）与 rows[i]（字面 JSON 字段名）——模型倾向镜像结果里的复数 rows。
 func navTableCell(m map[string]any, segs []string) (float64, error) {
-	if len(segs) != 2 {
-		return 0, fmt.Errorf("table 寻址须为 row[i].<col>，得到 %v", segs)
+	rows, hasRows := m["rows"].([]any)
+	if !hasRows {
+		return 0, fmt.Errorf("table 缺少 rows 字段或类型错误")
 	}
-	sel := selectorRe.FindStringSubmatch(segs[0])
-	// 接受 row[i]（关键字）与 rows[i]（字面 JSON 字段名）——模型倾向镜像结果里的复数 rows。
-	if sel == nil || (sel[1] != "row" && sel[1] != "rows") {
-		return 0, fmt.Errorf("table 首段须为 row[i] 或 rows[i]: %q", segs[0])
+	switch len(segs) {
+	case 1:
+		ij := rowsIJRe.FindStringSubmatch(segs[0])
+		if ij == nil {
+			return 0, fmt.Errorf("table 单段寻址须为 rows[i][j]: %q", segs[0])
+		}
+		// rowsIJRe 已保证 ij[1]/ij[2] 为 \d+，Atoi 不会失败。
+		i, _ := strconv.Atoi(ij[1])
+		j, _ := strconv.Atoi(ij[2])
+		row, err := tableRow(rows, i)
+		if err != nil {
+			return 0, err
+		}
+		return tableCellByPos(row, i, j)
+	case 2:
+		sel := selectorRe.FindStringSubmatch(segs[0])
+		if sel == nil || (sel[1] != "row" && sel[1] != "rows") {
+			return 0, fmt.Errorf("table 首段须为 row[i] 或 rows[i]: %q", segs[0])
+		}
+		i, err := strconv.Atoi(sel[2])
+		if err != nil {
+			return 0, fmt.Errorf("行下标无效: %q", sel[2])
+		}
+		row, err := tableRow(rows, i)
+		if err != nil {
+			return 0, err
+		}
+		col := segs[1]
+		if j, err := strconv.Atoi(col); err == nil {
+			return tableCellByPos(row, i, j)
+		}
+		cols, _ := m["columns"].([]any)
+		for ci, c := range cols {
+			cm, ok := c.(map[string]any)
+			if ok && fmt.Sprint(cm["name"]) == col {
+				return tableCellByPos(row, i, ci)
+			}
+		}
+		return 0, fmt.Errorf("列 %q 不存在", col)
+	default:
+		return 0, fmt.Errorf("table 寻址须为 row[i].<col> 或 rows[i][j]，得到 %v", segs)
 	}
-	i, err := strconv.Atoi(sel[2])
-	if err != nil {
-		return 0, fmt.Errorf("行下标无效: %q", sel[2])
-	}
-	rows, _ := m["rows"].([]any)
+}
+
+// tableRow 取第 i 行（边界检查 + 行须为数组）。
+func tableRow(rows []any, i int) ([]any, error) {
 	if i < 0 || i >= len(rows) {
-		return 0, fmt.Errorf("行下标 %d 越界（共 %d 行）", i, len(rows))
+		return nil, fmt.Errorf("行下标 %d 越界（共 %d 行）", i, len(rows))
 	}
 	row, ok := rows[i].([]any)
 	if !ok {
-		return 0, fmt.Errorf("第 %d 行非数组", i)
+		return nil, fmt.Errorf("第 %d 行非数组", i)
 	}
-	cols, _ := m["columns"].([]any)
-	col := segs[1]
-	for ci, c := range cols {
-		cm, ok := c.(map[string]any)
-		if ok && fmt.Sprint(cm["name"]) == col {
-			if ci >= len(row) {
-				return 0, fmt.Errorf("列 %q 下标 %d 超出行宽", col, ci)
-			}
-			if f, ok := toFloat(row[ci]); ok {
-				return f, nil
-			}
-			return 0, fmt.Errorf("单元格 [%d][%s] 非数值: %v", i, col, row[ci])
-		}
+	return row, nil
+}
+
+// tableCellByPos 取第 i 行第 j 列的标量（列下标越界 / 非数值 → 明确报错）。
+func tableCellByPos(row []any, i, j int) (float64, error) {
+	if j < 0 || j >= len(row) {
+		return 0, fmt.Errorf("列下标 %d 越界（行宽 %d）", j, len(row))
 	}
-	return 0, fmt.Errorf("列 %q 不存在", col)
+	if f, ok := toFloat(row[j]); ok {
+		return f, nil
+	}
+	return 0, fmt.Errorf("单元格 [%d][%d] 非数值: %v", i, j, row[j])
 }
 
 var errUnsupportedOp = errors.New("派生算子未注册")
