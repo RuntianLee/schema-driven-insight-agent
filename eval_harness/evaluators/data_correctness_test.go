@@ -460,6 +460,159 @@ any_of:
 	})
 }
 
+func TestDataCorrectness_ExpectValuesNameBindingRegression(t *testing.T) {
+	row := []any{int64(20), int64(12)}
+	idx := map[string]int{"total": 0, "churned": 1}
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total", "n", "count"}, Value: 20},
+		{Candidates: []string{"churned", "exited"}, Value: 12},
+	})
+	if len(fails) != 0 {
+		t.Fatalf("已识别列名应强绑定通过，got: %v", fails)
+	}
+}
+
+func TestDataCorrectness_ExpectValuesExoticAliasFallbackPasses(t *testing.T) {
+	row := []any{int64(20), int64(12)}
+	idx := map[string]int{"total_count": 0, "churned_count": 1} // 候选集外别名
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total", "n", "count"}, Value: 20},
+		{Candidates: []string{"churned", "exited"}, Value: 12},
+	})
+	if len(fails) != 0 {
+		t.Fatalf("候选列名全不存在应按值兜底通过，got: %v", fails)
+	}
+}
+
+func TestDataCorrectness_ExpectValuesKnownColumnWrongValueFails(t *testing.T) {
+	row := []any{int64(99), int64(12)} // total 列存在但值错
+	idx := map[string]int{"total": 0, "churned": 1}
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total", "n"}, Value: 20},
+	})
+	if len(fails) == 0 {
+		t.Fatal("已识别列名值错应 FAIL（不兜底放水）")
+	}
+}
+
+func TestDataCorrectness_ExpectValuesExoticAliasWrongValueFails(t *testing.T) {
+	row := []any{int64(99), int64(99)} // 生僻别名且值不在行
+	idx := map[string]int{"total_count": 0, "churned_count": 1}
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total", "n"}, Value: 20},
+	})
+	if len(fails) == 0 {
+		t.Fatal("生僻别名且值不在行应 FAIL")
+	}
+}
+
+func TestDataCorrectness_ExpectValuesDistinctCellRequired(t *testing.T) {
+	// 单 cell 值 12，两个兜底量都要 12：一个能认领、另一个应因无未占用 cell 而 FAIL。
+	row := []any{int64(12)}
+	idx := map[string]int{"x": 0}
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total"}, Value: 12},
+		{Candidates: []string{"churned"}, Value: 12},
+	})
+	if len(fails) == 0 {
+		t.Fatal("两个兜底量不得复用同一 cell，应 FAIL")
+	}
+}
+
+func TestDataCorrectness_ExpectValuesTwoDistinctCellsPass(t *testing.T) {
+	// 两个 cell 各为 12，两个兜底量各认领一个 → PASS。
+	row := []any{int64(12), int64(12)}
+	idx := map[string]int{"x": 0, "y": 1}
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total"}, Value: 12},
+		{Candidates: []string{"churned"}, Value: 12},
+	})
+	if len(fails) != 0 {
+		t.Fatalf("两个不同 cell 应各自认领通过，got: %v", fails)
+	}
+}
+
+// 已接受残留 ④：两量都用生僻别名 + 完整对调（总数 12/流失 20），distinct-cell 各占一格 → PASS。
+// 业务荒谬但由叙述维度兜住；此测锁定当前行为防回归误改。
+func TestDataCorrectness_ExpectValuesAcceptedResidualFullSwap(t *testing.T) {
+	row := []any{int64(12), int64(20)} // 生僻别名，值对调
+	idx := map[string]int{"a_count": 0, "b_count": 1}
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total"}, Value: 20},
+		{Candidates: []string{"churned"}, Value: 12},
+	})
+	if len(fails) != 0 {
+		t.Fatalf("已接受残留：双生僻别名对调当前判 PASS，got: %v", fails)
+	}
+}
+
+func TestDataCorrectness_ExpectValuesViaEvaluateAnyOf(t *testing.T) {
+	// agent 用候选集外别名 total_count/churned_count（候选集外复合后缀别名场景）的 ungrouped 单行。
+	resp := contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+		Columns: []contract.ColumnMeta{{Name: "total_count"}, {Name: "churned_count"}},
+		Rows:    [][]any{{int64(20), int64(12)}},
+	}}
+	res := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: resp}}}
+	spec := specNode(t, `
+tool: analyze
+expect_status: OK
+any_of:
+  - table:
+    - single_row: true
+      expect_values:
+        - {candidates: ["total", "count", "n", "cnt"], value: 20}
+        - {candidates: ["churned", "sum_Exited", "exited"], value: 12}
+`)
+	score, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !score.Pass {
+		t.Fatalf("候选集外别名应按值兜底 PASS，got %+v", score)
+	}
+}
+
+// 守护：接入后 expect_values 值错必须 FAIL。若 expect_values 未真正接入 checkTable，
+// single_row 分支会因无其它断言空 fails 而假 PASS——此测专门锁住该回归。
+func TestDataCorrectness_ExpectValuesViaEvaluateWrongValueFails(t *testing.T) {
+	resp := contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+		Columns: []contract.ColumnMeta{{Name: "total_count"}, {Name: "churned_count"}},
+		Rows:    [][]any{{int64(20), int64(12)}},
+	}}
+	res := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: resp}}}
+	spec := specNode(t, `
+tool: analyze
+expect_status: OK
+any_of:
+  - table:
+    - single_row: true
+      expect_values:
+        - {candidates: ["total", "count", "n"], value: 99999}
+`)
+	score, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if score.Pass {
+		t.Fatal("值 99999 不在行内，expect_values 已接入则必须 FAIL（防假 PASS 放水）")
+	}
+}
+
+func TestDataCorrectness_ExpectValuesRejectsEmptyCandidates(t *testing.T) {
+	res := resultWith(contract.Response{Status: contract.StatusOK})
+	spec := specNode(t, `
+tool: query_distribution
+table:
+  - single_row: true
+    expect_values:
+      - {candidates: [], value: 20}
+`)
+	_, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+	if err == nil {
+		t.Fatal("expect_values 空 candidates 应返回配置错误")
+	}
+}
+
 func TestDataCorrectness_CountChurnBothShapesRealValues(t *testing.T) {
 	cases := []struct {
 		name                          string
