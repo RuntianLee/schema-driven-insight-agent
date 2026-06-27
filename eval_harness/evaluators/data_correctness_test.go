@@ -506,6 +506,46 @@ func TestDataCorrectness_ExpectValuesExoticAliasWrongValueFails(t *testing.T) {
 	}
 }
 
+func TestDataCorrectness_ExpectValuesDistinctCellRequired(t *testing.T) {
+	// 单 cell 值 12，两个兜底量都要 12：一个能认领、另一个应因无未占用 cell 而 FAIL。
+	row := []any{int64(12)}
+	idx := map[string]int{"x": 0}
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total"}, Value: 12},
+		{Candidates: []string{"churned"}, Value: 12},
+	})
+	if len(fails) == 0 {
+		t.Fatal("两个兜底量不得复用同一 cell，应 FAIL")
+	}
+}
+
+func TestDataCorrectness_ExpectValuesTwoDistinctCellsPass(t *testing.T) {
+	// 两个 cell 各为 12，两个兜底量各认领一个 → PASS。
+	row := []any{int64(12), int64(12)}
+	idx := map[string]int{"x": 0, "y": 1}
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total"}, Value: 12},
+		{Candidates: []string{"churned"}, Value: 12},
+	})
+	if len(fails) != 0 {
+		t.Fatalf("两个不同 cell 应各自认领通过，got: %v", fails)
+	}
+}
+
+// 已接受残留 ④：两量都用生僻别名 + 完整对调（总数 12/流失 20），distinct-cell 各占一格 → PASS。
+// 业务荒谬但由叙述维度兜住；此测锁定当前行为防回归误改。
+func TestDataCorrectness_ExpectValuesAcceptedResidualFullSwap(t *testing.T) {
+	row := []any{int64(12), int64(20)} // 生僻别名，值对调
+	idx := map[string]int{"a_count": 0, "b_count": 1}
+	fails := checkExpectValues(row, idx, map[string]string{"row": "single"}, []dcValueBind{
+		{Candidates: []string{"total"}, Value: 20},
+		{Candidates: []string{"churned"}, Value: 12},
+	})
+	if len(fails) != 0 {
+		t.Fatalf("已接受残留：双生僻别名对调当前判 PASS，got: %v", fails)
+	}
+}
+
 func TestDataCorrectness_CountChurnBothShapesRealValues(t *testing.T) {
 	cases := []struct {
 		name                          string

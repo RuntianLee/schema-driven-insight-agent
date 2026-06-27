@@ -395,10 +395,12 @@ func checkTableExpectAny(row []any, idx map[string]int, match map[string]string,
 }
 
 // checkExpectValues 两相断言：① 名字绑定相——候选列名存在则值必须匹配，否则 FAIL（不兜底）；
-// ② 值存在性兜底相——仅对候选列名全不存在的量，在本行任意数值 cell 找等于 Value 的格子。
-// 只定位 cell、不碰值比对（守恒）。本 Task 先用朴素兜底，distinct-cell 是后续 Task。
+// ② 值存在性兜底相——仅对候选列名全不存在的量，在本行某个「未被占用」的数值 cell 找等于 Value 的格子。
+// 名字命中和兜底命中共享 claimed 集，兜底量不得复用已占用 cell（distinct-cell）。
+// 只定位 cell、不碰值比对（守恒）。
 func checkExpectValues(row []any, idx map[string]int, match map[string]string, binds []dcValueBind) []string {
 	var fails []string
+	claimed := make(map[int]bool)
 	var fallback []dcValueBind
 	for _, b := range binds {
 		col, i, present := firstPresentCandidate(row, idx, b.Candidates)
@@ -413,12 +415,17 @@ func checkExpectValues(row []any, idx map[string]int, match map[string]string, b
 		}
 		if !floatEq(got, b.Value) {
 			fails = append(fails, fmt.Sprintf("table%v.%s=%g want %g", match, col, got, b.Value))
+			continue
 		}
+		claimed[i] = true
 	}
 	for _, b := range fallback {
-		if !rowHasValue(row, b.Value) {
-			fails = append(fails, fmt.Sprintf("table%v.expect_values 值 %g 未出现（候选列名 %v 均不存在，按值兜底失败）", match, b.Value, b.Candidates))
+		i, found := firstUnclaimedValueCell(row, claimed, b.Value)
+		if !found {
+			fails = append(fails, fmt.Sprintf("table%v.expect_values 值 %g 未在未占用单元格出现（候选列名 %v 均不存在）", match, b.Value, b.Candidates))
+			continue
 		}
+		claimed[i] = true
 	}
 	return fails
 }
@@ -433,14 +440,17 @@ func firstPresentCandidate(row []any, idx map[string]int, candidates []string) (
 	return "", 0, false
 }
 
-// rowHasValue 报告本行是否有任一数值 cell 等于 v（后续 Task 将被 distinct-cell 版替换）。
-func rowHasValue(row []any, v float64) bool {
+// firstUnclaimedValueCell 在未被 claimed 的 cell 中找首个等于 v 的数值格子。
+func firstUnclaimedValueCell(row []any, claimed map[int]bool, v float64) (int, bool) {
 	for i := range row {
+		if claimed[i] {
+			continue
+		}
 		if got, ok := cellToFloat(row[i]); ok && floatEq(got, v) {
-			return true
+			return i, true
 		}
 	}
-	return false
+	return 0, false
 }
 
 func cellToString(v any) string {
