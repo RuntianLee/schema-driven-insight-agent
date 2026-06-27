@@ -376,3 +376,82 @@ func TestBuildPrompt_OmitsEmptySchemaContext(t *testing.T) {
 		t.Fatalf("empty schemaContext must not leave triple newline:\n%s", got)
 	}
 }
+
+// recordingMock 记录每次收到的 conversation prompt，供断言注入内容。
+type recordingMock struct {
+	responses []string
+	idx       int
+	prompts   []string
+}
+
+func (m *recordingMock) Call(_ context.Context, prompt string) (string, int, int, float64, error) {
+	m.prompts = append(m.prompts, prompt)
+	if m.idx >= len(m.responses) {
+		return "（recordingMock exhausted）", 1, 1, 0, nil
+	}
+	r := m.responses[m.idx]
+	m.idx++
+	return r, len(r) / 4, len(r) / 4, 0, nil
+}
+func (m *recordingMock) Model() string { return "mock-rec" }
+
+var _ llm.Client = (*recordingMock)(nil)
+
+// TestRunner_InjectsResultID_OKOnly：成功结果注入 `结果 id: q{N}`（OK-only 编号），
+// 失败结果注入「不计入结果编号」。(b') 修复 B：agent 抄 id 而非数。
+func TestRunner_InjectsResultID_OKOnly(t *testing.T) {
+	ctx := context.Background()
+	schema := loadSchema(t)
+
+	trajDB, err := trajectory.Open(filepath.Join(t.TempDir(), "traj.db"))
+	if err != nil {
+		t.Fatalf("traj open: %v", err)
+	}
+	t.Cleanup(func() { trajDB.Close() })
+	if err := trajectory.Migrate(trajDB); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// analyze 工具：第 1 次返回 SCHEMA_ERROR（不计入编号），之后返回 OK。
+	var analyzeCallCount int
+	reg := tools.NewRegistry()
+	reg.Register("analyze", func(c context.Context, args map[string]any) (contract.Response, error) {
+		analyzeCallCount++
+		if analyzeCallCount == 1 {
+			return contract.Response{Status: contract.StatusSchemaError, Hint: "列名错"}, nil
+		}
+		return contract.Response{Status: contract.StatusOK,
+			Table: &contract.TableResult{
+				Columns: []contract.ColumnMeta{{Name: "n"}}, Rows: [][]any{{42.0}}, RowCount: 1}}, nil
+	})
+
+	// 三次 analyze（table 相同、group_by 各异以绕过去重护栏）：fail → ok(q1) → ok(q2)，再最终答案。
+	mock := &recordingMock{responses: []string{
+		`{"tool":"analyze","args":{"table":"player_basics","group_by":"a"}}`,
+		`{"tool":"analyze","args":{"table":"player_basics","group_by":"b"}}`,
+		`{"tool":"analyze","args":{"table":"player_basics","group_by":"c"}}`,
+		"最终报告：n=42。",
+	}}
+
+	opener := func(c context.Context, ver, q string) (agent.TrajectoryStore, error) {
+		return trajectory.New(c, trajDB, ver, q, "benchmark")
+	}
+	runner := New(mock, reg, opener, schema.Digest())
+	if _, err := runner.Run(ctx, "测试 q-index 注入"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if analyzeCallCount != 3 {
+		t.Fatalf("三次 analyze 应都派发（去重护栏不应吞调用），实际 %d 次", analyzeCallCount)
+	}
+
+	last := mock.prompts[len(mock.prompts)-1]
+	for _, want := range []string{"结果 id: q1", "结果 id: q2", "不计入结果编号"} {
+		if !strings.Contains(last, want) {
+			t.Errorf("注入对话缺 %q:\n%s", want, last)
+		}
+	}
+	if strings.Contains(last, "结果 id: q3") {
+		t.Errorf("失败调用不应占用编号（不应出现 q3）:\n%s", last)
+	}
+}

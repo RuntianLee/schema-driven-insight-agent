@@ -79,6 +79,10 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 	// 约束之外的确定性兜底，避免低活跃数据上 LLM 误判 filter 失效而反复重发同一查询）。
 	seen := make(map[string]string)
 
+	// okSeq：成功(OK)结果的累计序号，注入给 agent 作归因块 q{N} 的「结果 id」——
+	// agent 抄此 id 而非心算第几个查询（口径同 contract.OKCalls / resolver，2026-06-27 (b')）。
+	okSeq := 0
+
 	var spentTokens int
 	var spentUSD float64
 	for turn := 0; turn < maxTurns; turn++ {
@@ -119,7 +123,12 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 
 		resultJSON, _ := json.Marshal(toolResp)
 		seen[key] = string(resultJSON)
-		conversation += fmt.Sprintf("\n\n## 工具 %s 返回\n%s\n\n请据此给出最终回答或修正后重试。", call.Tool, string(resultJSON))
+		if toolResp.Status == contract.StatusOK {
+			okSeq++
+			conversation += fmt.Sprintf("\n\n## 工具 %s 返回（结果 id: q%d，归因块引用此 id）\n%s\n\n请据此给出最终回答或修正后重试。", call.Tool, okSeq, string(resultJSON))
+		} else {
+			conversation += fmt.Sprintf("\n\n## 工具 %s 返回（本次未成功，不计入结果编号）\n%s\n\n请修正后重试。", call.Tool, string(resultJSON))
+		}
 	}
 
 	_ = traj.Finalize(ctx, "error", "", "exceeded max turns")
