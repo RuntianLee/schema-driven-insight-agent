@@ -310,14 +310,14 @@ func checkTable(tr *contract.TableResult, want dcTableRow) []string {
 		if len(tr.Rows) != 1 {
 			return []string{fmt.Sprintf("single_row 期望恰好 1 行，得 %d 行", len(tr.Rows))}
 		}
-		return checkTableExpect(tr.Rows[0], idx, map[string]string{"row": "single"}, want.Expect, want.ExpectPos, want.ExpectAny)
+		return checkTableExpect(tr.Rows[0], idx, map[string]string{"row": "single"}, want.Expect, want.ExpectPos, want.ExpectAny, want.ExpectValues)
 	}
 	if len(want.Match) == 0 {
 		return []string{"table 断言缺少 match（空 match 会误配首行）"}
 	}
 	for _, row := range tr.Rows {
 		if tableRowMatches(row, idx, want.Match) {
-			return checkTableExpect(row, idx, want.Match, want.Expect, want.ExpectPos, want.ExpectAny)
+			return checkTableExpect(row, idx, want.Match, want.Expect, want.ExpectPos, want.ExpectAny, want.ExpectValues)
 		}
 	}
 	return []string{fmt.Sprintf("未找到匹配行 %v", want.Match)}
@@ -333,7 +333,7 @@ func tableRowMatches(row []any, idx map[string]int, match map[string]string) boo
 	return true
 }
 
-func checkTableExpect(row []any, idx map[string]int, match map[string]string, expect map[string]float64, expectPos map[int]float64, expectAny []dcTableExpectAny) []string {
+func checkTableExpect(row []any, idx map[string]int, match map[string]string, expect map[string]float64, expectPos map[int]float64, expectAny []dcTableExpectAny, expectValues []dcValueBind) []string {
 	var fails []string
 	for k, v := range expect {
 		i, ok := idx[k]
@@ -367,6 +367,7 @@ func checkTableExpect(row []any, idx map[string]int, match map[string]string, ex
 	for _, anyExpect := range expectAny {
 		fails = append(fails, checkTableExpectAny(row, idx, match, anyExpect)...)
 	}
+	fails = append(fails, checkExpectValues(row, idx, match, expectValues)...)
 	return fails
 }
 

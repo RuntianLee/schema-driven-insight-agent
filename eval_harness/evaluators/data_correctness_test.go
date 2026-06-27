@@ -546,6 +546,58 @@ func TestDataCorrectness_ExpectValuesAcceptedResidualFullSwap(t *testing.T) {
 	}
 }
 
+func TestDataCorrectness_ExpectValuesViaEvaluateAnyOf(t *testing.T) {
+	// agent 用候选集外别名 total_count/churned_count（F-06 留痕场景）的 ungrouped 单行。
+	resp := contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+		Columns: []contract.ColumnMeta{{Name: "total_count"}, {Name: "churned_count"}},
+		Rows:    [][]any{{int64(20), int64(12)}},
+	}}
+	res := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: resp}}}
+	spec := specNode(t, `
+tool: analyze
+expect_status: OK
+any_of:
+  - table:
+    - single_row: true
+      expect_values:
+        - {candidates: ["total", "count", "n", "cnt"], value: 20}
+        - {candidates: ["churned", "sum_Exited", "exited"], value: 12}
+`)
+	score, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !score.Pass {
+		t.Fatalf("候选集外别名应按值兜底 PASS，got %+v", score)
+	}
+}
+
+// 守护：接入后 expect_values 值错必须 FAIL。若 expect_values 未真正接入 checkTable，
+// single_row 分支会因无其它断言空 fails 而假 PASS——此测专门锁住该回归。
+func TestDataCorrectness_ExpectValuesViaEvaluateWrongValueFails(t *testing.T) {
+	resp := contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
+		Columns: []contract.ColumnMeta{{Name: "total_count"}, {Name: "churned_count"}},
+		Rows:    [][]any{{int64(20), int64(12)}},
+	}}
+	res := TaskResult{ToolCalls: []contract.ToolCall{{Name: "analyze", Response: resp}}}
+	spec := specNode(t, `
+tool: analyze
+expect_status: OK
+any_of:
+  - table:
+    - single_row: true
+      expect_values:
+        - {candidates: ["total", "count", "n"], value: 99999}
+`)
+	score, err := NewDataCorrectness().Evaluate(context.Background(), res, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if score.Pass {
+		t.Fatal("值 99999 不在行内，expect_values 已接入则必须 FAIL（防假 PASS 放水）")
+	}
+}
+
 func TestDataCorrectness_CountChurnBothShapesRealValues(t *testing.T) {
 	cases := []struct {
 		name                          string
