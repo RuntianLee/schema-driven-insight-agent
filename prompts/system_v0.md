@@ -114,12 +114,12 @@ filter 的值可以是标量（等值）或对象 `{"op": "<", "value": N}`，op
 
 然后另起一行输出自然语言结论。
 
-路径语法（照工具结果里出现的字段名写，**q{N} 对应第 N 个成功(status=OK)的工具结果**——SCHEMA_ERROR 等失败重试不计数，即第一个成功结果永远是 q1）：
+路径语法（照工具结果里出现的字段名写，**q{N} 的 N 直接抄每个工具结果开头印出的「结果 id」（如「结果 id: q2」就写 q2），不要自己数第几个**——失败/重试的查询不分配 id、不计入编号）：
 - q{N}.profile.<字段>（如 q1.profile.mean）
 - q{N}.groups[i].profile.<字段> / q{N}.groups[i].data[j].<字段>（★首选：按数组下标照结果 JSON 直接写，如 q2.groups[1].data[0].avg_value）
 - q{N}.group[键].profile.<字段>（按组名匹配，也可，如 q2.group[EU].profile.mean）
 - q{N}.bucket[键].<字段> / q{N}.data[j].<字段>（如 q1.bucket[500-1000].pct_players）
-- q{N}.table.rows[i].<列名>（★首选：复数 rows 照结果 JSON 直接写，如 q2.table.rows[1].avg_money；单数 q{N}.table.row[i].<列名> 也可）
+- q{N}.table.rows[i].<列名>（★首选：复数 rows 照结果 JSON 直接写，如 q2.table.rows[1].avg_money；单数 q{N}.table.row[i].<列名> 也可；列位也可用**数字下标**镜像原始 JSON 数组，如 q2.table.rows[0][1]）
 - q{N}.groups_tail.<字段>（如 q1.groups_tail.player_count）
 
 派生式：写成**函数调用** `算子(操作数1, 操作数2)`，操作数用上方路径语法。**禁止写中缀算式**——`ratio=a/b`、`a/b`、`q1.x/q2.y` 都是错的，必须写成 `ratio(q1.x, q2.y)`。可用算子（冒号后是含义、不是写法）：

@@ -12,6 +12,7 @@ import (
 	"github.com/RuntianLee/schema-driven-insight-agent/agent"
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
+	"github.com/RuntianLee/schema-driven-insight-agent/prompts"
 	"github.com/RuntianLee/schema-driven-insight-agent/schema_protocol"
 	"github.com/RuntianLee/schema-driven-insight-agent/tools"
 	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
@@ -453,5 +454,16 @@ func TestRunner_InjectsResultID_OKOnly(t *testing.T) {
 	}
 	if strings.Contains(last, "结果 id: q3") {
 		t.Errorf("失败调用不应占用编号（不应出现 q3）:\n%s", last)
+	}
+}
+
+// TestSystemPrompt_QIDCopyGuidance：归因规范须指引「抄印出的结果 id、不要自己数」，
+// 并说明数字列下标可用。(b') 修复的 prompt 兜底。
+func TestSystemPrompt_QIDCopyGuidance(t *testing.T) {
+	p := prompts.SystemV0
+	for _, want := range []string{"抄", "结果 id", "数字下标"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("system prompt 归因规范缺 %q", want)
+		}
 	}
 }
