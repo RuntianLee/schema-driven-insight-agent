@@ -547,7 +547,7 @@ func TestDataCorrectness_ExpectValuesAcceptedResidualFullSwap(t *testing.T) {
 }
 
 func TestDataCorrectness_ExpectValuesViaEvaluateAnyOf(t *testing.T) {
-	// agent 用候选集外别名 total_count/churned_count（F-06 留痕场景）的 ungrouped 单行。
+	// agent 用候选集外别名 total_count/churned_count（候选集外复合后缀别名场景）的 ungrouped 单行。
 	resp := contract.Response{Status: contract.StatusOK, Table: &contract.TableResult{
 		Columns: []contract.ColumnMeta{{Name: "total_count"}, {Name: "churned_count"}},
 		Rows:    [][]any{{int64(20), int64(12)}},

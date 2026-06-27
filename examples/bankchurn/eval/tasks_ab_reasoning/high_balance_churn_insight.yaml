@@ -28,7 +28,7 @@ evaluators:
           expect_values: [{candidates: ["n", "count", "customer_count", "cnt"], value: 8}]
         - match: {Exited: "1"}
           expect_values: [{candidates: ["n", "count", "customer_count", "cnt"], value: 12}]
-      # shape 2：ungrouped 聚合单行（候选含 F-06 留痕别名；rate 派生量不强断言降脆性）
+      # shape 2：ungrouped 聚合单行（候选含复合后缀别名（total_count/churned_count 等）；rate 派生量不强断言降脆性）
       - table:
         - single_row: true
           expect_values:
