@@ -26,7 +26,8 @@ var keyedArray = map[string][2]string{
 }
 
 // Resolve 把单元格路径（q{N}.<导航>）解析成一个标量数值。
-// q{N} 用 contract.AnalystResultID 同口径（1-based，定位 calls[N-1].Response）。
+// q{N} 用 contract.OKCalls 过滤后 1-based 定位（与 AnalystResults/advisor_grounding 同口径，
+// 2026-06-27 (b') 统一）；失败/重试调用不计数。
 // 任何解析失败/越界/键缺失/叶子非数值都返回明确 error（调用方据此标 unresolvable）。
 func Resolve(calls []contract.ToolCall, path string) (float64, error) {
 	segs := strings.Split(path, ".")
@@ -39,7 +40,7 @@ func Resolve(calls []contract.ToolCall, path string) (float64, error) {
 	}
 	// q{N} 只数 status=OK 的结果：SCHEMA_ERROR/INSUFFICIENT_DATA 等失败重试不计数，
 	// 否则一次 schema 重试就会把后续所有锚的编号顶偏（2026-06-25 T1 实证）。
-	ok := okCalls(calls)
+	ok := contract.OKCalls(calls)
 	if n < 1 || n > len(ok) {
 		return 0, fmt.Errorf("%s 越界（共 %d 个成功结果）", segs[0], len(ok))
 	}
@@ -52,17 +53,6 @@ func Resolve(calls []contract.ToolCall, path string) (float64, error) {
 		return 0, fmt.Errorf("JSON 反序列化 Response 失败: %w", err)
 	}
 	return navigate(cur, segs[1:])
-}
-
-// okCalls 过滤出 status=OK 的工具结果，供 q{N} 索引（失败/重试不计数，编号对重试鲁棒）。
-func okCalls(calls []contract.ToolCall) []contract.ToolCall {
-	out := make([]contract.ToolCall, 0, len(calls))
-	for _, c := range calls {
-		if c.Response.Status == contract.StatusOK {
-			out = append(out, c)
-		}
-	}
-	return out
 }
 
 // parseQ 解析 "q3" → 3。

@@ -10,7 +10,11 @@ import (
 
 func twoToolResult(adv *contract.AdvisoryDraft) TaskResult {
 	return TaskResult{
-		ToolCalls: []contract.ToolCall{{Name: "analyze"}, {Name: "query_distribution"}}, // → q1,q2
+		// 两个 status=OK 调用 → q1,q2（OK-only 口径，2026-06-27 (b') 统一）。
+		ToolCalls: []contract.ToolCall{
+			{Name: "analyze", Response: contract.Response{Status: contract.StatusOK}},
+			{Name: "query_distribution", Response: contract.Response{Status: contract.StatusOK}},
+		},
 		Advisory:  adv,
 	}
 }
@@ -45,5 +49,26 @@ func TestAdvisorGroundingFailsOnBadRefOrEmpty(t *testing.T) {
 	s2, _ := NewAdvisorGrounding().Evaluate(context.Background(), twoToolResult(nil), specNode(t, "min_items: 1"))
 	if s2.Pass {
 		t.Error("无 Advisory（流水线未跑）应 gate 失败")
+	}
+}
+
+func TestQIndexCadence_Unified_OKOnly(t *testing.T) {
+	calls := []contract.ToolCall{
+		{Name: "analyze", Response: contract.Response{Status: contract.StatusSchemaError}},
+		{Name: "analyze", Response: contract.Response{Status: contract.StatusOK,
+			Profile: &contract.DistProfile{Mean: 100}}},
+		{Name: "analyze", Response: contract.Response{Status: contract.StatusOK,
+			Profile: &contract.DistProfile{Mean: 200}}},
+	}
+	got1, err := Resolve(calls, "q1.profile.mean")
+	if err != nil || got1 != 100 {
+		t.Fatalf("q1.profile.mean 应=100，得 %v err %v", got1, err)
+	}
+	got2, err := Resolve(calls, "q2.profile.mean")
+	if err != nil || got2 != 200 {
+		t.Fatalf("q2.profile.mean 应=200，得 %v err %v", got2, err)
+	}
+	if _, err := Resolve(calls, "q3.profile.mean"); err == nil {
+		t.Fatal("q3 应越界（仅 2 个成功结果）")
 	}
 }
