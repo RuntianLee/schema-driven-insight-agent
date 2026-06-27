@@ -346,3 +346,30 @@ func TestResolve_TableCell_NumericColumnIndex_Bad(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitArgs_BracketAware(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"a, b", []string{"a", "b"}},
+		{"q1.x", []string{"q1.x"}},
+		{"", nil},
+		{"a, sum(b, c, d)", []string{"a", "sum(b, c, d)"}},            // 嵌套括号内逗号不切
+		{"pct(a, b), pct(c, d)", []string{"pct(a, b)", "pct(c, d)"}}, // 两个嵌套操作数
+		{"q1.table.rows[0][1], q1.table.rows[1][1]", []string{"q1.table.rows[0][1]", "q1.table.rows[1][1]"}}, // 方括号深度跟踪覆盖
+		{"ratio(diff(1, x), diff(y, z))", []string{"ratio(diff(1, x), diff(y, z))"}}, // 整体单 arg（深度从不归 0）
+	}
+	for _, c := range cases {
+		got := splitArgs(c.in)
+		if len(got) != len(c.want) {
+			t.Errorf("splitArgs(%q) = %v, want %v", c.in, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("splitArgs(%q)[%d] = %q, want %q", c.in, i, got[i], c.want[i])
+			}
+		}
+	}
+}

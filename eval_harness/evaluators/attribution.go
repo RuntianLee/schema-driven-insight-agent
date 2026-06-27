@@ -295,16 +295,30 @@ func ResolveAnchor(calls []contract.ToolCall, anchor string) (float64, error) {
 	return op.Apply(vals)
 }
 
-// splitArgs 按顶层逗号切分（Phase 1 操作数是无嵌套括号的路径，简单切分即可）。
+// splitArgs 按「顶层」逗号切分操作数：维护 () 与 [] 的嵌套深度，
+// 只在两者深度均为 0 的逗号处切分，从而正确切出嵌套算子调用（sum(b,c)）与
+// 带下标的路径（rows[0][1]）。解析失败一律由上层落 honest unresolvable。
 func splitArgs(s string) []string {
 	if strings.TrimSpace(s) == "" {
 		return nil
 	}
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		out = append(out, strings.TrimSpace(p))
+	var out []string
+	depth := 0
+	start := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(', '[':
+			depth++
+		case ')', ']':
+			depth--
+		case ',':
+			if depth == 0 {
+				out = append(out, strings.TrimSpace(s[start:i]))
+				start = i + 1
+			}
+		}
 	}
+	out = append(out, strings.TrimSpace(s[start:]))
 	return out
 }
 
