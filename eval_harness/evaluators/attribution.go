@@ -21,12 +21,41 @@ var selectorRe = regexp.MustCompile(`^([a-zA-Z_]+)\[(.+)\]$`)
 // （模型镜像原始 JSON 数组的自然写法，2026-06-27 (b') case iii）。
 var rowsIJRe = regexp.MustCompile(`^rows?\[(\d+)\]\[(\d+)\]$`)
 
+// rowsStarRe 匹配整列通配段 rows[*] / row[*]（列聚合，2026-06-27 (b'')）。
+var rowsStarRe = regexp.MustCompile(`^rows?\[\*\]$`)
+
+// rowsStarJRe 匹配单段整列通配+数字列下标 rows[*][j] / row[*][j]（2026-06-27 (b'')）。
+var rowsStarJRe = regexp.MustCompile(`^rows?\[\*\]\[(\d+)\]$`)
+
 // keyedArray 把选择器糖映射到「数组字段名 + 匹配字段名」：
 // group[K] = groups[] 里 group==K；bucket[K] = data[] 里 bucket==K。
 // 这是 Response 形状约定（2 条），不是字段枚举——新增统计字段无需改这里。
 var keyedArray = map[string][2]string{
 	"group":  {"groups", "group"},
 	"bucket": {"data", "bucket"},
+}
+
+// qNode 解析 q{N} 首段，返回该成功结果 Response 的通用 JSON 根（map/any）。
+// q{N} 用 contract.OKCalls 过滤后 1-based 定位（与 AnalystResults/advisor_grounding 同口径）。
+// Resolve（标量）与 resolveColumn（向量）共用此前缀逻辑（DRY）。
+func qNode(calls []contract.ToolCall, qseg string) (any, error) {
+	n, err := parseQ(qseg)
+	if err != nil {
+		return nil, err
+	}
+	ok := contract.OKCalls(calls)
+	if n < 1 || n > len(ok) {
+		return nil, fmt.Errorf("%s 越界（共 %d 个成功结果）", qseg, len(ok))
+	}
+	var cur any
+	b, err := json.Marshal(ok[n-1].Response)
+	if err != nil {
+		return nil, fmt.Errorf("序列化 Response 失败: %w", err)
+	}
+	if err := json.Unmarshal(b, &cur); err != nil {
+		return nil, fmt.Errorf("JSON 反序列化 Response 失败: %w", err)
+	}
+	return cur, nil
 }
 
 // Resolve 把单元格路径（q{N}.<导航>）解析成一个标量数值。
@@ -38,23 +67,9 @@ func Resolve(calls []contract.ToolCall, path string) (float64, error) {
 	if len(segs) < 2 {
 		return 0, fmt.Errorf("path 太短: %q", path)
 	}
-	n, err := parseQ(segs[0])
+	cur, err := qNode(calls, segs[0])
 	if err != nil {
 		return 0, err
-	}
-	// q{N} 只数 status=OK 的结果：SCHEMA_ERROR/INSUFFICIENT_DATA 等失败重试不计数，
-	// 否则一次 schema 重试就会把后续所有锚的编号顶偏（2026-06-25 T1 实证）。
-	ok := contract.OKCalls(calls)
-	if n < 1 || n > len(ok) {
-		return 0, fmt.Errorf("%s 越界（共 %d 个成功结果）", segs[0], len(ok))
-	}
-	var cur any
-	b, err := json.Marshal(ok[n-1].Response)
-	if err != nil {
-		return 0, fmt.Errorf("序列化 Response 失败: %w", err)
-	}
-	if err := json.Unmarshal(b, &cur); err != nil {
-		return 0, fmt.Errorf("JSON 反序列化 Response 失败: %w", err)
 	}
 	return navigate(cur, segs[1:])
 }
@@ -222,6 +237,95 @@ func tableCellByPos(row []any, i, j int) (float64, error) {
 	return 0, fmt.Errorf("单元格 [%d][%d] 非数值: %v", i, j, row[j])
 }
 
+// resolveColumn 解析含 rows[*] 的路径为一列标量向量（仅供变长算子如 sum 消费）。
+// 路径形如 q{N}.<...>.table.rows[*].<列名|数字列下标>。
+func resolveColumn(calls []contract.ToolCall, path string) ([]float64, error) {
+	segs := strings.Split(path, ".")
+	if len(segs) < 2 {
+		return nil, fmt.Errorf("path 太短: %q", path)
+	}
+	cur, err := qNode(calls, segs[0])
+	if err != nil {
+		return nil, err
+	}
+	return navColumn(cur, segs[1:])
+}
+
+// navColumn 沿通用 JSON 下行直到命中 table（含 columns+rows），再交 navTableColumn 取整列。
+func navColumn(cur any, segs []string) ([]float64, error) {
+	for i := 0; i < len(segs); i++ {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("段 %q 的父节点非对象", segs[i])
+		}
+		if _, hasCols := m["columns"]; hasCols {
+			if _, hasRows := m["rows"]; hasRows {
+				// 单段 rows[*][j] 形式：展开为两段 ["rows[*]", "j"] 交 navTableColumn。
+				tail := segs[i:]
+				if len(tail) == 1 {
+					if mm := rowsStarJRe.FindStringSubmatch(tail[0]); mm != nil {
+						return navTableColumn(m, []string{"rows[*]", mm[1]})
+					}
+				}
+				return navTableColumn(m, tail)
+			}
+		}
+		child, ok := m[segs[i]]
+		if !ok {
+			return nil, fmt.Errorf("字段 %q 不存在", segs[i])
+		}
+		cur = child
+	}
+	return nil, fmt.Errorf("路径未到达含 rows[*] 的 table: %v", segs)
+}
+
+// navTableColumn 从 table 取 rows[*].<col> 整列为 []float64。
+// segs 须为 [rows[*], <列名|数字列下标>]；任意行非数组/单元格非数值/列缺失/越界 → honest error。
+func navTableColumn(m map[string]any, segs []string) ([]float64, error) {
+	if len(segs) != 2 || !rowsStarRe.MatchString(segs[0]) {
+		return nil, fmt.Errorf("rows[*] 列聚合须为 rows[*].<列>，得到 %v", segs)
+	}
+	rows, ok := m["rows"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("table 缺少 rows 字段或类型错误")
+	}
+	col := segs[1]
+	j := -1
+	if idx, err := strconv.Atoi(col); err == nil {
+		j = idx
+	} else {
+		cols, _ := m["columns"].([]any)
+		for ci, c := range cols {
+			if cm, ok := c.(map[string]any); ok && fmt.Sprint(cm["name"]) == col {
+				j = ci
+				break
+			}
+		}
+		if j < 0 {
+			return nil, fmt.Errorf("列 %q 不存在", col)
+		}
+	}
+	out := make([]float64, 0, len(rows))
+	for i, r := range rows {
+		row, ok := r.([]any)
+		if !ok {
+			return nil, fmt.Errorf("第 %d 行非数组", i)
+		}
+		if j < 0 || j >= len(row) {
+			return nil, fmt.Errorf("列下标 %d 越界（行宽 %d）", j, len(row))
+		}
+		f, ok := toFloat(row[j])
+		if !ok {
+			return nil, fmt.Errorf("单元格 [%d][%d] 非数值: %v", i, j, row[j])
+		}
+		out = append(out, f)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("rows[*] 命中空列")
+	}
+	return out, nil
+}
+
 var errUnsupportedOp = errors.New("派生算子未注册")
 
 // DerivOp 是一个派生算子：纯函数 + arity 声明 + 喂判官的一句话语义。
@@ -264,10 +368,15 @@ func divide(a, b float64) (float64, error) {
 	return a / b, nil
 }
 
-// derivRe 匹配派生式 name(args)；args 内为逗号分隔的单元格路径（Phase 1 不支持嵌套括号）。
+// derivRe 匹配派生式 name(args)；args 由 splitArgs 括号感知切分，支持嵌套调用。
 var derivRe = regexp.MustCompile(`^([a-zA-Z_]+)\((.*)\)$`)
 
+// rowsStarPathRe 检测「裸路径」是否含 rows[*] 通配（用于操作数派发，非算子表达式）。
+var rowsStarPathRe = regexp.MustCompile(`rows?\[\*\]`)
+
 // ResolveAnchor 派发：派生式 name(...) → 解析操作数 + 应用算子；否则当单元格路径走 Resolve。
+// 操作数经 resolveOperand 求值，支持任意深度嵌套（操作数本身可为 name(...)）与
+// rows[*] 列向量（仅可喂变长算子）。
 func ResolveAnchor(calls []contract.ToolCall, anchor string) (float64, error) {
 	m := derivRe.FindStringSubmatch(strings.TrimSpace(anchor))
 	if m == nil {
@@ -278,33 +387,77 @@ func ResolveAnchor(calls []contract.ToolCall, anchor string) (float64, error) {
 		return 0, fmt.Errorf("%w: %s", errUnsupportedOp, m[1])
 	}
 	args := splitArgs(m[2])
-	if op.Arity >= 0 && len(args) != op.Arity {
-		return 0, fmt.Errorf("算子 %s 需 %d 个操作数，得到 %d", op.Name, op.Arity, len(args))
-	}
-	if op.Arity == -1 && len(args) == 0 {
+	if len(args) == 0 {
 		return 0, fmt.Errorf("算子 %s 需至少 1 个操作数", op.Name)
 	}
-	vals := make([]float64, len(args))
-	for i, a := range args {
-		v, err := Resolve(calls, strings.TrimSpace(a))
+	var vals []float64
+	for _, a := range args {
+		ov, err := resolveOperand(calls, a)
 		if err != nil {
 			return 0, fmt.Errorf("操作数 %q 不可解析: %w", a, err)
 		}
-		vals[i] = v
+		// 定长算子：每个操作数必须求成恰好 1 个标量（rows[*] 向量喂定长算子在此被拒）。
+		if op.Arity >= 0 && len(ov) != 1 {
+			return 0, fmt.Errorf("算子 %s 的操作数 %q 须为标量，得到 %d 个值", op.Name, a, len(ov))
+		}
+		vals = append(vals, ov...)
+	}
+	// 定长算子：操作数总数须等于 arity（变长拼接后由 Apply 自行处理）。
+	if op.Arity >= 0 && len(vals) != op.Arity {
+		return 0, fmt.Errorf("算子 %s 需 %d 个操作数，得到 %d", op.Name, op.Arity, len(vals))
 	}
 	return op.Apply(vals)
 }
 
-// splitArgs 按顶层逗号切分（Phase 1 操作数是无嵌套括号的路径，简单切分即可）。
+// resolveOperand 把一个操作数表达式求成标量向量（标量 → 单元素）：
+//  1) name(...) 形态 → 递归 ResolveAnchor（标量结果，支持任意深度嵌套）。
+//  2) 裸路径含 rows[*] → resolveColumn（列向量，仅变长算子可消费）。
+//  3) 否则 → Resolve（单元格标量）。
+//
+// 顺序保证 sum(rows[*].x) 这类「含 rows[*] 的算子」走 (1) 而非 (2)。
+func resolveOperand(calls []contract.ToolCall, expr string) ([]float64, error) {
+	expr = strings.TrimSpace(expr)
+	if derivRe.MatchString(expr) {
+		v, err := ResolveAnchor(calls, expr)
+		if err != nil {
+			return nil, err
+		}
+		return []float64{v}, nil
+	}
+	if rowsStarPathRe.MatchString(expr) {
+		return resolveColumn(calls, expr)
+	}
+	v, err := Resolve(calls, expr)
+	if err != nil {
+		return nil, err
+	}
+	return []float64{v}, nil
+}
+
+// splitArgs 按「顶层」逗号切分操作数：维护 () 与 [] 的嵌套深度，
+// 只在两者深度均为 0 的逗号处切分，从而正确切出嵌套算子调用（sum(b,c)）与
+// 带下标的路径（rows[0][1]）。解析失败一律由上层落 honest unresolvable。
 func splitArgs(s string) []string {
 	if strings.TrimSpace(s) == "" {
 		return nil
 	}
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		out = append(out, strings.TrimSpace(p))
+	var out []string
+	depth := 0
+	start := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(', '[':
+			depth++
+		case ')', ']':
+			depth--
+		case ',':
+			if depth == 0 {
+				out = append(out, strings.TrimSpace(s[start:i]))
+				start = i + 1
+			}
+		}
 	}
+	out = append(out, strings.TrimSpace(s[start:]))
 	return out
 }
 

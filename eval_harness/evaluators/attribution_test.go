@@ -346,3 +346,142 @@ func TestResolve_TableCell_NumericColumnIndex_Bad(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveColumn_RowsWildcard(t *testing.T) {
+	calls := tableCalls() // 列 avg_money(列下标1) = [2000, 8000]
+	// 列名形式
+	got, err := resolveColumn(calls, "q1.table.rows[*].avg_money")
+	if err != nil {
+		t.Fatalf("列名形式意外报错: %v", err)
+	}
+	if len(got) != 2 || got[0] != 2000 || got[1] != 8000 {
+		t.Fatalf("got %v want [2000 8000]", got)
+	}
+	// 数字列下标形式
+	got2, err := resolveColumn(calls, "q1.table.rows[*][1]")
+	if err != nil {
+		t.Fatalf("数字列下标意外报错: %v", err)
+	}
+	if len(got2) != 2 || got2[0] != 2000 || got2[1] != 8000 {
+		t.Fatalf("got %v want [2000 8000]", got2)
+	}
+}
+
+func TestResolveColumn_Bad(t *testing.T) {
+	calls := tableCalls()
+	for _, path := range []string{
+		"q1.table.rows[*].nope", // 列名不存在
+		"q1.table.rows[*][9]",   // 列下标越界
+		"q9.table.rows[*][1]",   // q 越界
+	} {
+		if _, err := resolveColumn(calls, path); err == nil {
+			t.Errorf("%s: 应报错", path)
+		}
+	}
+}
+
+// churnTableCalls：单 call（q1），table 含 total_customers / churned_count 两列三行。
+// 列 total_customers = [100, 200, 300]（和 600）；churned_count = [10, 40, 50]（和 100）。
+func churnTableCalls() []contract.ToolCall {
+	return []contract.ToolCall{
+		{Name: "analyze", Response: contract.Response{
+			Status: contract.StatusOK,
+			Table: &contract.TableResult{
+				Columns:  []contract.ColumnMeta{{Name: "total_customers"}, {Name: "churned_count"}},
+				Rows:     [][]any{{100.0, 10.0}, {200.0, 40.0}, {300.0, 50.0}},
+				RowCount: 3,
+			},
+		}},
+	}
+}
+
+func TestResolveAnchor_Nested(t *testing.T) {
+	calls := churnTableCalls()
+	cases := []struct {
+		anchor string
+		want   float64
+	}{
+		// 占比：第0行 total / 三行 total 之和 = 100/600
+		{"ratio(q1.table.rows[0][0], sum(q1.table.rows[0][0], q1.table.rows[1][0], q1.table.rows[2][0]))", 100.0 / 600.0},
+		// 两段差距：pct(churned0,total0) - pct(churned2,total2) = 10/100 - 50/300
+		{"diff(pct(q1.table.rows[0][1], q1.table.rows[0][0]), pct(q1.table.rows[2][1], q1.table.rows[2][0]))", 10.0/100.0 - 50.0/300.0},
+		// rows[*] 整列求和喂 sum
+		{"sum(q1.table.rows[*].churned_count)", 100.0},
+		// 嵌套 sum + rows[*]：总流失率 = 总churned / 总total = 100/600
+		{"ratio(sum(q1.table.rows[*].churned_count), sum(q1.table.rows[*].total_customers))", 100.0 / 600.0},
+	}
+	const ulpTol = 1e-14 // 仅吸收编译期常量 vs 运行时 float64 的末位差（~1e-17 量级），远小于业务容差
+	for _, c := range cases {
+		got, err := ResolveAnchor(calls, c.anchor)
+		if err != nil {
+			t.Errorf("%s: 意外报错 %v", c.anchor, err)
+			continue
+		}
+		diff := got - c.want
+		if diff < -ulpTol || diff > ulpTol {
+			t.Errorf("%s: got %.20f want %.20f (diff %e)", c.anchor, got, c.want, diff)
+		}
+	}
+}
+
+func TestResolveAnchor_NestedSafety(t *testing.T) {
+	calls := churnTableCalls()
+	for _, anchor := range []string{
+		"ratio(q1.table.rows[*].churned_count, q1.table.rows[*].total_customers)", // 向量喂定长算子 → 操作数非标量
+		"q1.table.rows[*].churned_count",                                          // 裸 rows[*]（不在算子内，走标量 Resolve）
+		"ratio(diff(1, q1.table.rows[0][0]), diff(q1.table.rows[1][0], q1.table.rows[2][0]), q1.table.rows[0][1])", // 真 arity 错：3 个操作数喂 ratio
+	} {
+		if _, err := ResolveAnchor(calls, anchor); err == nil {
+			t.Errorf("%s: 应报错（unresolvable）", anchor)
+		}
+	}
+}
+
+func TestSplitArgs_BracketAware(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"a, b", []string{"a", "b"}},
+		{"q1.x", []string{"q1.x"}},
+		{"", nil},
+		{"a, sum(b, c, d)", []string{"a", "sum(b, c, d)"}},            // 嵌套括号内逗号不切
+		{"pct(a, b), pct(c, d)", []string{"pct(a, b)", "pct(c, d)"}}, // 两个嵌套操作数
+		{"q1.table.rows[0][1], q1.table.rows[1][1]", []string{"q1.table.rows[0][1]", "q1.table.rows[1][1]"}}, // 方括号深度跟踪覆盖
+		{"ratio(diff(1, x), diff(y, z))", []string{"ratio(diff(1, x), diff(y, z))"}}, // 整体单 arg（深度从不归 0）
+	}
+	for _, c := range cases {
+		got := splitArgs(c.in)
+		if len(got) != len(c.want) {
+			t.Errorf("splitArgs(%q) = %v, want %v", c.in, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("splitArgs(%q)[%d] = %q, want %q", c.in, i, got[i], c.want[i])
+			}
+		}
+	}
+}
+
+// TestEvalAnchor_Conservation_Nested 守恒不变量：嵌套/rows[*] 锚解析通后，
+// claimed 与真值不符仍必须判 AttrMismatch（查假数能力零回归）；相符判 AttrResolved。
+func TestEvalAnchor_Conservation_Nested(t *testing.T) {
+	calls := churnTableCalls() // 总流失率真值 = 100/600 ≈ 0.1667
+	cases := []struct {
+		anchor  string
+		claimed float64
+		want    AttrStatus
+	}{
+		{"ratio(sum(q1.table.rows[*].churned_count), sum(q1.table.rows[*].total_customers))", 100.0 / 600.0, AttrResolved},
+		{"ratio(sum(q1.table.rows[*].churned_count), sum(q1.table.rows[*].total_customers))", 0.5, AttrMismatch}, // 编造值仍被抓
+		{"sum(q1.table.rows[*].churned_count)", 100, AttrResolved},
+		{"sum(q1.table.rows[*].churned_count)", 999, AttrMismatch}, // 编造值仍被抓
+	}
+	for _, c := range cases {
+		v := EvalAnchor(calls, c.anchor, c.claimed, defaultAttrTol)
+		if v.Status != c.want {
+			t.Errorf("anchor=%q claimed=%v: got %s want %s", c.anchor, c.claimed, v.Status, c.want)
+		}
+	}
+}
