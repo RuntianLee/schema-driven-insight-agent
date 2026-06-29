@@ -216,3 +216,8 @@ func persistVerdict(db *sql.DB, trajID, taskID string, s evaluators.Score) {
 		 VALUES (?,?,?,?,?,?,?,?)`,
 		uuid.NewString(), trajID, taskID, s.Evaluator, s.Value, pass, s.Display, time.Now().Unix())
 }
+
+// ParseAttributionOutput 是 parseAttributionOutput 的导出包装，供离线审计工具（cmd/attr-audit）复用同一解析逻辑（DRY）。
+func ParseAttributionOutput(raw string) ([]contract.ClaimAnchor, string) {
+	return parseAttributionOutput(raw)
+}
