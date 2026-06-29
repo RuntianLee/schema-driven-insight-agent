@@ -1,7 +1,9 @@
 package evaluators
 
 import (
+	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -483,5 +485,44 @@ func TestEvalAnchor_Conservation_Nested(t *testing.T) {
 		if v.Status != c.want {
 			t.Errorf("anchor=%q claimed=%v: got %s want %s", c.anchor, c.claimed, v.Status, c.want)
 		}
+	}
+}
+
+// TestEvalAnchor_NaNClaimedUnresolvable 锁死：claimed 不可解析（NaN，如倍率词）→ unresolvable，不静默、不冒充 mismatch。
+func TestEvalAnchor_NaNClaimedUnresolvable(t *testing.T) {
+	calls := twoGroupCalls() // q2.group[EU].profile.mean=3000
+	v := EvalAnchor(calls, "q2.group[EU].profile.mean", math.NaN(), defaultAttrTol)
+	if v.Status != AttrUnresolvable {
+		t.Fatalf("NaN claimed 应 unresolvable，得到 %s", v.Status)
+	}
+}
+
+// TestClaimAnchor_StringClaimedConservation 守恒矩阵（端到端：JSON 字符串 claimed → EvalAnchor 裁决）。
+// 锚对→resolved；锚错→仍 mismatch（编造仍抓，判定零放水）。
+func TestClaimAnchor_StringClaimedConservation(t *testing.T) {
+	calls := twoGroupCalls() // EU.mean=3000, US.mean=1500
+	cases := []struct {
+		name    string
+		rawJSON string // 单条 claim JSON（claimed_value 为字符串）
+		anchor  string
+		want    AttrStatus
+	}{
+		{"带单位串_锚对", `{"claimed_value":"3000人"}`, "q2.group[EU].profile.mean", AttrResolved},
+		{"带单位串_锚错", `{"claimed_value":"3000人"}`, "q2.group[US].profile.mean", AttrMismatch},
+		{"倍率词_未支持", `{"claimed_value":"20万"}`, "q2.group[EU].profile.mean", AttrUnresolvable},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var anchor struct {
+				ClaimedValue contract.ClaimedNumber `json:"claimed_value"`
+			}
+			if err := json.Unmarshal([]byte(c.rawJSON), &anchor); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			v := EvalAnchor(calls, c.anchor, float64(anchor.ClaimedValue), defaultAttrTol)
+			if v.Status != c.want {
+				t.Fatalf("got %s want %s", v.Status, c.want)
+			}
+		})
 	}
 }

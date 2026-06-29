@@ -109,5 +109,5 @@ type ClaimAnchor struct {
 	Claim        string  `json:"claim"`         // 原文定量主张片段
 	Anchor       string  `json:"anchor"`        // 路径或派生式；找不到出处留空
 	Kind         string  `json:"kind"`          // "cell" | "derived"
-	ClaimedValue float64 `json:"claimed_value"` // 从主张读到的数值（量纲与 anchor 一致）
+	ClaimedValue ClaimedNumber `json:"claimed_value"` // 从主张读到的数值；容错带单位字符串（ClaimedNumber）
 }

@@ -489,6 +489,10 @@ func EvalAnchor(calls []contract.ToolCall, anchor string, claimed, relTol float6
 		v.Status = AttrUnresolvable
 		return v
 	}
+	if math.IsNaN(claimed) { // claimed 不可解析（倍率词等）→ 无从比对 → unresolvable（不静默、不冒充 mismatch）
+		v.Status = AttrUnresolvable
+		return v
+	}
 	val, err := ResolveAnchor(calls, anchor)
 	if err != nil {
 		if errors.Is(err, errUnsupportedOp) {
