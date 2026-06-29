@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -166,29 +167,41 @@ func applyReflection(ctx context.Context, p ReflectionProvider, taskID, question
 	return rc + "\n\n---\n\n" + question
 }
 
-// parseAttributionOutput 扫 raw 输出找首个 {"attribution":[...]} JSON 行，
-// 解码取 []contract.ClaimAnchor，剩余文本作为 Answer。
-// - 无 needle 或 JSON 解码失败（无法定位 JSON 结束）→ nil, raw（向后兼容，不中断）。
-// - 解码成功但数组为空 → nil, remaining（无主张，但仍剥离 JSON 块，避免 JSON 串污染 Answer）。
-// 假定归因块出现在输出起始（由 Analyst prompt 规定）；若 needle 前存在文本，该前缀会被丢弃。
+// parseAttributionOutput 扫 raw 找首个 {"attribution":[...]} JSON 块，逐条解码取 []contract.ClaimAnchor，剩余文本作为 Answer。
+// - 无 needle（真无块）→ nil, raw。
+// - 块在但顶层结构坏 → 记 warning（区别于"真无块"，杜绝伪装成 (e)）后 nil, raw。
+// - 单条结构坏 → 记 warning + 合成一条坏条（Anchor 空→下游 unresolvable），绝不因一条坏块丢整块。
+// - 解码成功但数组空 → nil, remaining（无主张，但剥离 JSON 块避免污染 Answer）。
+// 假定归因块出现在输出起始（Analyst prompt 规定）；needle 前文本会被丢弃。
 func parseAttributionOutput(raw string) ([]contract.ClaimAnchor, string) {
 	const needle = `{"attribution":`
 	idx := strings.Index(raw, needle)
 	if idx < 0 {
-		return nil, raw
+		return nil, raw // 真无块
 	}
 	var out struct {
-		Attribution []contract.ClaimAnchor `json:"attribution"`
+		Attribution []json.RawMessage `json:"attribution"`
 	}
 	dec := json.NewDecoder(strings.NewReader(raw[idx:]))
 	if err := dec.Decode(&out); err != nil {
-		return nil, raw // 无法定位 JSON 结束，保留原文
+		fmt.Fprintf(os.Stderr, "warn: attribution 块解码失败（块在但坏，非缺块）: %v\n", err)
+		return nil, raw
 	}
 	remaining := strings.TrimLeft(raw[idx+int(dec.InputOffset()):], "\r\n ")
 	if len(out.Attribution) == 0 {
 		return nil, remaining // 空数组：无主张，但 JSON 块已剥离
 	}
-	return out.Attribution, remaining
+	claims := make([]contract.ClaimAnchor, 0, len(out.Attribution))
+	for i, rawClaim := range out.Attribution {
+		var c contract.ClaimAnchor
+		if err := json.Unmarshal(rawClaim, &c); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: attribution 第 %d 条解码失败，标记 unresolvable: %v\n", i, err)
+			claims = append(claims, contract.ClaimAnchor{Claim: "(unparseable)", ClaimedValue: contract.ClaimedNumber(math.NaN())})
+			continue
+		}
+		claims = append(claims, c)
+	}
+	return claims, remaining
 }
 
 // persistVerdict 把一个 evaluator 评分写入 eval_results（与 trajectory 关联）。

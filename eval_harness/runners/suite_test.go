@@ -207,6 +207,20 @@ func TestParseAttributionOutput(t *testing.T) {
 			wantNilClaims: true,
 			wantAnswer:    "叙述文本。",
 		},
+		{
+			name: "claimed_value 带单位字符串 → 不再丢整块（(h) 核心回归）",
+			raw: `{"attribution":[{"claim":"共20人","anchor":"q1.profile.count","kind":"cell","claimed_value":"20人"}]}
+余额超过 150000 的客户共 20 人。`,
+			wantNClaims: 1,
+			wantAnswer:  "余额超过 150000 的客户共 20 人。",
+		},
+		{
+			name: "两条含一结构坏条 → 保留好条+坏条，不丢整块",
+			raw: `{"attribution":[{"claim":"好","anchor":"q1.profile.count","kind":"cell","claimed_value":"20人"},{"claim":"坏","anchor":{},"kind":"cell","claimed_value":"x"}]}
+叙述。`,
+			wantNClaims: 2,
+			wantAnswer:  "叙述。",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
