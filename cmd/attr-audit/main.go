@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/runners"
@@ -33,7 +34,9 @@ func oldStrictParse(raw string) int {
 	return len(out.Attribution)
 }
 
-var multiplierWords = []string{"万", "千", "亿", "k", "K", "M", "B"}
+// multiplierRe 精确匹配 claimed_value 字符串里"数字紧跟倍率词"（如 "20万"/"1.2亿"/"3k"），
+// 而非整段输出里任意出现的字母——避免 k/M/B 单字母 ASCII 在英文/JSON 文本里的假阳性。
+var multiplierRe = regexp.MustCompile(`"claimed_value"\s*:\s*"[0-9.,]+\s*(万|千|亿|k|K|M|B)`)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -81,11 +84,8 @@ func main() {
 				recovered++
 				fmt.Printf("RECOVERED %s::%s  old=0 new=%d\n", filepath.Base(p), id, newN)
 			}
-			for _, w := range multiplierWords {
-				if strings.Contains(fo, `claimed_value`) && strings.Contains(fo, w) {
-					multiplierHits++
-					break
-				}
+			if multiplierRe.MatchString(fo) {
+				multiplierHits++
 			}
 		}
 		rows.Close()
@@ -96,5 +96,5 @@ func main() {
 	fmt.Printf("trajectories 总数: %d\n", total)
 	fmt.Printf("含归因块: %d\n", hadBlock)
 	fmt.Printf("parse 假失败可恢复（旧0/新≥1）: %d\n", recovered)
-	fmt.Printf("倍率词探针命中（claimed 旁见 万/亿/k/M）: %d  —— 若材料性>0 触发倍率缩放档（spec §6）\n", multiplierHits)
+	fmt.Printf("倍率词探针命中（claimed_value 字符串里数字紧跟 万/亿/千/k/M/B）: %d  —— 若材料性>0 触发倍率缩放档（spec §6）\n", multiplierHits)
 }
