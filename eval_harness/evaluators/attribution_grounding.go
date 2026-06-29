@@ -46,7 +46,7 @@ func (a *AttributionGrounding) Evaluate(_ context.Context, res TaskResult, spec 
 	bad := 0
 	var badDetails []string
 	for _, c := range res.AttributionClaims {
-		v := EvalAnchor(res.ToolCalls, c.Anchor, c.ClaimedValue, defaultAttrTol)
+		v := EvalAnchor(res.ToolCalls, c.Anchor, float64(c.ClaimedValue), defaultAttrTol)
 		if v.Status == AttrMismatch || v.Status == AttrUnresolvable {
 			bad++
 			badDetails = append(badDetails, fmt.Sprintf("「%s」anchor=%q %s", c.Claim, c.Anchor, v.Status))
