@@ -1,17 +1,24 @@
 // Command attr-audit 离线回溯：扫 trajectory DB，量化有多少 GATE「实得0条」其实是本 parse 假失败
 // （旧 float64 严解=0 条但新 ClaimedNumber 解=≥1 条），并统计 claimed_value 里倍率词频次（探针条款）。
-// 零 LLM、零网络。用法：attr-audit <dir-or-glob-of-*.db>...
+// 零 LLM、零网络。用法：attr-audit [-resolve] <dir-or-glob-of-*.db>...
+//
+// -resolve 模式：对每个含归因块的 trajectory，从 trajectory_steps 按 step_index 顺序
+// 重建 []contract.ToolCall（tool_call 步的 output 字段即 contract.Response JSON），
+// 再对每条 claim 跑 EvalAnchor，统计 resolved/mismatch/unresolvable。
 package main
 
 import (
 	"database/sql"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/RuntianLee/schema-driven-insight-agent/contract"
+	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/runners"
 	_ "modernc.org/sqlite"
 )
@@ -38,13 +45,71 @@ func oldStrictParse(raw string) int {
 // 而非整段输出里任意出现的字母——避免 k/M/B 单字母 ASCII 在英文/JSON 文本里的假阳性。
 var multiplierRe = regexp.MustCompile(`"claimed_value"\s*:\s*"[0-9.,]+\s*(万|千|亿|k|K|M|B)`)
 
+// loadToolCalls 从 trajectory_steps 表按 step_index 顺序读 tool_call 步，
+// 将每步的 output 字段（contract.Response JSON）unmarshal 并组成 []contract.ToolCall。
+// 顺序与原始 trajectory 一致，保证 q{N} 锚的 0-based 编号正确对应。
+func loadToolCalls(db *sql.DB, trajectoryID string) ([]contract.ToolCall, error) {
+	rows, err := db.Query(
+		`SELECT tool_name, coalesce(output,'') FROM trajectory_steps
+		 WHERE trajectory_id=? AND step_type='tool_call'
+		 ORDER BY step_index`,
+		trajectoryID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var calls []contract.ToolCall
+	for rows.Next() {
+		var name, output string
+		if err := rows.Scan(&name, &output); err != nil {
+			return nil, err
+		}
+		var resp contract.Response
+		if output != "" {
+			if err := json.Unmarshal([]byte(output), &resp); err != nil {
+				// output 不是 Response JSON（可能是空或别的格式）→ 视为 error 步跳过
+				continue
+			}
+		}
+		calls = append(calls, contract.ToolCall{Name: name, Response: resp})
+	}
+	return calls, rows.Err()
+}
+
+// resolveStats 是单个 trajectory 的 EvalAnchor 统计结果。
+type resolveStats struct {
+	resolved    int
+	mismatch    int
+	unresolvable int
+	total       int
+}
+
+func (s resolveStats) String() string {
+	pct := 0.0
+	if s.total > 0 {
+		pct = float64(s.resolved) / float64(s.total) * 100
+	}
+	return fmt.Sprintf("total=%d resolved=%d(%.0f%%) mismatch=%d unresolvable=%d",
+		s.total, s.resolved, pct, s.mismatch, s.unresolvable)
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "用法: attr-audit <*.db | dir>...")
+	resolveMode := flag.Bool("resolve", false, "对每条归因块 claim 跑 EvalAnchor，统计 resolved/mismatch/unresolvable")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "用法: attr-audit [-resolve] <*.db | dir>...")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if flag.NArg() < 1 {
+		flag.Usage()
 		os.Exit(2)
 	}
+
 	var dbPaths []string
-	for _, arg := range os.Args[1:] {
+	for _, arg := range flag.Args() {
 		info, err := os.Stat(arg)
 		if err == nil && info.IsDir() {
 			matches, _ := filepath.Glob(filepath.Join(arg, "*.db"))
@@ -55,6 +120,10 @@ func main() {
 	}
 
 	var total, hadBlock, recovered, multiplierHits int
+
+	// -resolve 模式的全局计数
+	var resTotal, resResolved, resMismatch, resUnresolvable int
+
 	for _, p := range dbPaths {
 		db, err := sql.Open("sqlite", p)
 		if err != nil {
@@ -81,12 +150,45 @@ func main() {
 			oldN := oldStrictParse(fo)
 			newClaims, _ := runners.ParseAttributionOutput(fo)
 			newN := len(newClaims)
-			if oldN == 0 && newN > 0 {
+			isRecovered := oldN == 0 && newN > 0
+			if isRecovered {
 				recovered++
 				fmt.Printf("RECOVERED %s::%s  old=0 new=%d\n", filepath.Base(p), id, newN)
 			}
 			if multiplierRe.MatchString(fo) {
 				multiplierHits++
+			}
+
+			// -resolve 模式：对当前 trajectory 重建 calls 并逐 claim 跑 EvalAnchor
+			if *resolveMode && newN > 0 {
+				calls, err := loadToolCalls(db, id)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warn %s::%s load tool calls: %v\n", filepath.Base(p), id, err)
+					continue
+				}
+				var stats resolveStats
+				for _, c := range newClaims {
+					v := evaluators.EvalAnchor(calls, c.Anchor, float64(c.ClaimedValue), 0.01)
+					stats.total++
+					switch v.Status {
+					case evaluators.AttrResolved:
+						stats.resolved++
+					case evaluators.AttrMismatch:
+						stats.mismatch++
+					default:
+						// unresolvable / derived_unsupported 均计入 unresolvable 桶
+						stats.unresolvable++
+					}
+				}
+				resTotal += stats.total
+				resResolved += stats.resolved
+				resMismatch += stats.mismatch
+				resUnresolvable += stats.unresolvable
+
+				// 对 recovered run 额外打印逐 run 结果
+				if isRecovered {
+					fmt.Printf("  └─ RESOLVE %s::%s  %s\n", filepath.Base(p), id, stats)
+				}
 			}
 		}
 		if err := rows.Err(); err != nil {
@@ -101,4 +203,16 @@ func main() {
 	fmt.Printf("含归因块: %d\n", hadBlock)
 	fmt.Printf("parse 假失败可恢复（旧0/新≥1）: %d\n", recovered)
 	fmt.Printf("倍率词探针命中（claimed_value 字符串里数字紧跟 万/亿/千/k/M/B）: %d  —— 若材料性>0 触发倍率缩放档（spec §6）\n", multiplierHits)
+
+	if *resolveMode {
+		pct := 0.0
+		if resTotal > 0 {
+			pct = float64(resResolved) / float64(resTotal) * 100
+		}
+		fmt.Printf("\n=== -resolve 值解析层汇总（所有含归因块 trajectory）===\n")
+		fmt.Printf("claims 总数: %d\n", resTotal)
+		fmt.Printf("resolved: %d (%.1f%%)\n", resResolved, pct)
+		fmt.Printf("mismatch: %d\n", resMismatch)
+		fmt.Printf("unresolvable: %d\n", resUnresolvable)
+	}
 }
