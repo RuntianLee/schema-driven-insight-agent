@@ -15,7 +15,9 @@ import (
 type ClaimedNumber float64
 
 // decorativeSuffixes 是"数字即字面值"的装饰后缀（剥掉即可，数字照用）。
-// 倍率词刻意不在此——它们要缩放数字，当前置 NaN 显式暴露（见 parseDecoratedNumber）。
+// 注意「倍」/「x」属"标签型倍数"：数字即字面值（"3倍"→3、"2.3x"→2.3），不改变数量级，故归为装饰后缀。
+// 这与"缩放倍率词"（万/千/亿/k/M/B）是两个不同类别——后者需把数字放大数量级，刻意不支持、置 NaN
+// 显式暴露（见 parseDecoratedNumber）；二者切勿混淆。
 var decorativeSuffixes = []string{"人", "元", "个", "次", "天", "名", "位", "户", "倍", "x", "X"}
 
 // currencyPrefixes 是可剥的货币符前缀。
@@ -43,7 +45,7 @@ func (c ClaimedNumber) MarshalJSON() ([]byte, error) {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return []byte("null"), nil
 	}
-	return json.Marshal(f)
+	return json.Marshal(f) // f 是 float64 而非 ClaimedNumber——不会递归
 }
 
 // parseDecoratedNumber 剥装饰后缀/货币符/千分位 + % 处理；含倍率词或残留非数字 → NaN。
@@ -62,6 +64,7 @@ func parseDecoratedNumber(s string) float64 {
 		if strings.HasSuffix(s, p) {
 			pct = true
 			s = strings.TrimSuffix(s, p)
+			break // 只剥一个百分号："60%%" 残留 "60%" → ParseFloat 失败 → NaN（守恒）
 		}
 	}
 	for _, suf := range decorativeSuffixes {

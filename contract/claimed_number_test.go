@@ -19,6 +19,7 @@ func TestClaimedNumber_Unmarshal(t *testing.T) {
 		{"unit_yuan", `"1234元"`, 1234},
 		{"percent_halfwidth", `"60%"`, 0.6},
 		{"percent_fullwidth", `"60％"`, 0.6},
+		{"double_percent", `"60%%"`, math.NaN()},
 		{"thousands_currency", `"$1,234"`, 1234},
 		{"thousands_cn_yuan", `"1,234元"`, 1234},
 		{"ratio_bei", `"3倍"`, 3},
@@ -57,7 +58,10 @@ func TestClaimedNumber_MarshalNaNSafe(t *testing.T) {
 	if string(b) != "null" {
 		t.Fatalf("NaN 应序列化为 null，got %s", b)
 	}
-	b2, _ := json.Marshal(ClaimedNumber(20))
+	b2, err := json.Marshal(ClaimedNumber(20))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(b2) != "20" {
 		t.Fatalf("正常值应正常序列化，got %s", b2)
 	}
