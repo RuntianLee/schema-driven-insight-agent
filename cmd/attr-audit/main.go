@@ -70,6 +70,7 @@ func main() {
 		for rows.Next() {
 			var id, fo string
 			if err := rows.Scan(&id, &fo); err != nil {
+				fmt.Fprintf(os.Stderr, "warn %s: row scan error: %v\n", p, err)
 				continue
 			}
 			total++
@@ -87,6 +88,9 @@ func main() {
 			if multiplierRe.MatchString(fo) {
 				multiplierHits++
 			}
+		}
+		if err := rows.Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "warn %s: rows iteration error: %v\n", p, err)
 		}
 		rows.Close()
 		db.Close()
