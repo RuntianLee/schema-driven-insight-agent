@@ -50,7 +50,7 @@ var multiplierRe = regexp.MustCompile(`"claimed_value"\s*:\s*"[0-9.,]+\s*(万|�
 // 顺序与原始 trajectory 一致，保证 q{N} 锚的 0-based 编号正确对应。
 func loadToolCalls(db *sql.DB, trajectoryID string) ([]contract.ToolCall, error) {
 	rows, err := db.Query(
-		`SELECT tool_name, coalesce(output,'') FROM trajectory_steps
+		`SELECT step_index, coalesce(tool_name,''), coalesce(output,'') FROM trajectory_steps
 		 WHERE trajectory_id=? AND step_type='tool_call'
 		 ORDER BY step_index`,
 		trajectoryID,
@@ -62,14 +62,18 @@ func loadToolCalls(db *sql.DB, trajectoryID string) ([]contract.ToolCall, error)
 
 	var calls []contract.ToolCall
 	for rows.Next() {
+		var stepIndex int
 		var name, output string
-		if err := rows.Scan(&name, &output); err != nil {
+		if err := rows.Scan(&stepIndex, &name, &output); err != nil {
 			return nil, err
 		}
 		var resp contract.Response
 		if output != "" {
 			if err := json.Unmarshal([]byte(output), &resp); err != nil {
-				// output 不是 Response JSON（可能是空或别的格式）→ 视为 error 步跳过
+				// output 不是 Response JSON（坏行/别的形状）→ 跳过会让 OKCalls 编号错位，
+				// 必须告警（带 trajectory_id + step_index + err）而非静默吞掉。
+				fmt.Fprintf(os.Stderr, "warn loadToolCalls %s step_index=%d: unmarshal Response: %v\n",
+					trajectoryID, stepIndex, err)
 				continue
 			}
 		}
