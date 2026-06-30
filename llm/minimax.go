@@ -18,13 +18,14 @@ const (
 )
 
 type minimaxClient struct {
-	apiKey      string
-	model       string
-	endpoint    string
-	http        *http.Client
-	maxTokens   int      // 0 = 不发（openai）；anthropic 时 <=0 默认 4096
-	temperature *float64 // nil = 不发
-	format      string   // "" / "openai" = OpenAI chat-completions；"anthropic" = Anthropic Messages
+	apiKey          string
+	model           string
+	endpoint        string
+	http            *http.Client
+	maxTokens       int      // 0 = 不发（openai）；anthropic 时 <=0 默认 4096
+	temperature     *float64 // nil = 不发
+	format          string   // "" / "openai" = OpenAI chat-completions；"anthropic" = Anthropic Messages
+	disableThinking bool     // 仅 anthropic wire 生效：true → 发 thinking:{type:disabled}
 }
 
 // NewMiniMax constructs a MiniMax M2.7 HTTP client (design-v3 §4 LLM Provider).
@@ -58,6 +59,15 @@ func newMiniMaxFull(apiKey, model, endpoint string, timeout time.Duration, maxTo
 }
 
 func (c *minimaxClient) Model() string { return c.model }
+
+// WithJudgeProfile 返回 judge 调教后的副本：更大 max_tokens + 可选关 thinking。
+// 不可变：原 client 不变（含共享的 *http.Client 指针，安全）。
+func (c *minimaxClient) WithJudgeProfile(maxTokens int, disableThinking bool) Client {
+	clone := *c
+	clone.maxTokens = maxTokens
+	clone.disableThinking = disableThinking
+	return &clone
+}
 
 type chatReq struct {
 	Model       string    `json:"model"`
