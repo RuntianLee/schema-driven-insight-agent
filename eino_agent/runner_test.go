@@ -550,3 +550,42 @@ func TestParseMinimaxPerParameter(t *testing.T) {
 		}
 	})
 }
+
+// TestParseOpenAIJSON 验证 OpenAI 式 {name, arguments/parameters/input} 被解析，
+// arguments 支持对象与 JSON 字符串两种形态，含 tool 键则让位给项目格式。
+func TestParseOpenAIJSON(t *testing.T) {
+	cases := []struct {
+		name, input, wantTool string
+		wantTable             string
+	}{
+		{"name+arguments object", `{"name":"analyze","arguments":{"table":"player_basics"}}`, "analyze", "player_basics"},
+		{"name+parameters object", `{"name":"analyze","parameters":{"table":"pb"}}`, "analyze", "pb"},
+		{"name+arguments string-encoded", `{"name":"analyze","arguments":"{\"table\":\"pc\"}"}`, "analyze", "pc"},
+		{"name+input object", `{"name":"analyze","input":{"table":"pi"}}`, "analyze", "pi"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseToolCall(tc.input)
+			if !ok || got.Tool != tc.wantTool {
+				t.Fatalf("got (%q,%v), want %q", got.Tool, ok, tc.wantTool)
+			}
+			if got.Args["table"] != tc.wantTable {
+				t.Fatalf("table = %v, want %v", got.Args["table"], tc.wantTable)
+			}
+		})
+	}
+
+	t.Run("project format defers to project detector", func(t *testing.T) {
+		// {tool,args} 含 tool 键 → OpenAI 探测器让位、由项目探测器解。
+		got, ok := parseToolCall(`{"tool":"query_distribution","args":{"table":"x"}}`)
+		if !ok || got.Tool != "query_distribution" {
+			t.Fatalf("got (%q,%v), want query_distribution", got.Tool, ok)
+		}
+	})
+
+	t.Run("object without name or tool is not a tool call", func(t *testing.T) {
+		if _, ok := parseToolCall(`参考 {"bucket":"0~1w"} 的数据`); ok {
+			t.Fatal("stray object without name/tool should not parse")
+		}
+	})
+}

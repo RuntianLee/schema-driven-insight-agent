@@ -3,6 +3,7 @@
 package eino_agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -170,9 +171,63 @@ func parseProjectJSONToolCall(s string) (toolCall, bool) {
 	return decodeToolCall(quoteBareJSONKeys(s[start:]))
 }
 
-// 占位：家族B、家族A-OpenAI 探测器在后续任务实现，此处先始终返回 false 以编译通过。
+// 占位：家族B 探测器在后续任务实现，此处先始终返回 false 以编译通过。
 func parseTaggedJSONToolCall(s string) (toolCall, bool) { return toolCall{}, false }
-func parseOpenAIJSONToolCall(s string) (toolCall, bool) { return toolCall{}, false }
+
+// parseOpenAIJSONToolCall 解析 OpenAI 式 {name, arguments/parameters/input}（家族A）。
+// 首个 { 起；含 tool 键则让位给项目探测器。补裸键引号重试以容错。
+func parseOpenAIJSONToolCall(s string) (toolCall, bool) {
+	start := strings.Index(s, "{")
+	if start < 0 {
+		return toolCall{}, false
+	}
+	if c, ok := toolCallFromObject([]byte(s[start:]), true); ok {
+		return c, true
+	}
+	return toolCallFromObject([]byte(quoteBareJSONKeys(s[start:])), true)
+}
+
+// toolCallFromObject 从一段工具调用 JSON 对象解析 {name, arguments/parameters/input}，
+// 供家族A（OpenAI 纯 JSON）与家族B（标记包裹）共用。用 Decoder 容忍尾部散文。
+// deferToProject=true 时，对象含 "tool" 键则返回 false（让位给项目自有 {tool,args}）。
+// arguments 兼容对象形态与 JSON 字符串形态（OpenAI 把 arguments 序列化成字符串）。
+func toolCallFromObject(obj []byte, deferToProject bool) (toolCall, bool) {
+	var raw map[string]json.RawMessage
+	if json.NewDecoder(bytes.NewReader(obj)).Decode(&raw) != nil {
+		return toolCall{}, false
+	}
+	if deferToProject {
+		if _, has := raw["tool"]; has {
+			return toolCall{}, false
+		}
+	}
+	nameRaw, ok := raw["name"]
+	if !ok {
+		return toolCall{}, false
+	}
+	var name string
+	if json.Unmarshal(nameRaw, &name) != nil || name == "" {
+		return toolCall{}, false
+	}
+	args := map[string]any{}
+	for _, k := range []string{"arguments", "parameters", "input"} {
+		argRaw, ok := raw[k]
+		if !ok {
+			continue
+		}
+		var asObj map[string]any
+		if json.Unmarshal(argRaw, &asObj) == nil {
+			args = asObj // 对象形态
+		} else {
+			var asStr string
+			if json.Unmarshal(argRaw, &asStr) == nil {
+				_ = json.Unmarshal([]byte(asStr), &args) // JSON 字符串形态
+			}
+		}
+		break
+	}
+	return toolCall{Tool: name, Args: args}, true
+}
 
 var minimaxXMLToolCallPattern = regexp.MustCompile(`(?s)<invoke\s+name=["']([^"']+)["'][^>]*>.*?<parameter\s+name=["']args["'][^>]*>(.*?)</parameter>`)
 
