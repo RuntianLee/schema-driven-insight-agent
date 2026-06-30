@@ -176,20 +176,52 @@ func parseOpenAIJSONToolCall(s string) (toolCall, bool) { return toolCall{}, fal
 
 var minimaxXMLToolCallPattern = regexp.MustCompile(`(?s)<invoke\s+name=["']([^"']+)["'][^>]*>.*?<parameter\s+name=["']args["'][^>]*>(.*?)</parameter>`)
 
+// invokeBlockRe 抓第一个 <invoke name="X">…</invoke> 块（含其内部 body）。
+var invokeBlockRe = regexp.MustCompile(`(?s)<invoke\s+name=["']([^"']+)["'][^>]*>(.*?)</invoke>`)
+
+// paramRe 抓 <parameter name="K">V</parameter>（逐参数形态）。
+var paramRe = regexp.MustCompile(`(?s)<parameter\s+name=["']([^"']+)["'][^>]*>(.*?)</parameter>`)
+
+// parseMinimaxXMLToolCall 解析 MiniMax 原生 XML 工具调用（家族C）。
+// 先试既有 args-blob 形态（单个 name="args" 内含整块 JSON），不命中则逐参数兜底：
+// 取第一个 <invoke>，把其所有 <parameter name="K">V</parameter> 聚成 args，
+// 每个 V 按 JSON 解码（数组/对象/数字/bool），失败当字符串标量。
 func parseMinimaxXMLToolCall(s string) (toolCall, bool) {
-	m := minimaxXMLToolCallPattern.FindStringSubmatch(s)
-	if len(m) != 3 {
+	// 1) args-blob 既有路径优先（零回归）。
+	if m := minimaxXMLToolCallPattern.FindStringSubmatch(s); len(m) == 3 {
+		argsText := strings.TrimSpace(html.UnescapeString(m[2]))
+		if args, ok := decodeToolArgs(argsText); ok {
+			return toolCall{Tool: m[1], Args: args}, true
+		}
+		if args, ok := decodeToolArgs(quoteBareJSONKeys(argsText)); ok {
+			return toolCall{Tool: m[1], Args: args}, true
+		}
+		// args-blob 命中签名但 JSON 坏 → 继续逐参数兜底，不在此 return false。
+	}
+
+	// 2) 逐参数兜底：第一个 <invoke> + 其 <parameter>。
+	ib := invokeBlockRe.FindStringSubmatch(s)
+	if len(ib) != 3 {
 		return toolCall{}, false
 	}
-	argsText := strings.TrimSpace(html.UnescapeString(m[2]))
-	args, ok := decodeToolArgs(argsText)
-	if !ok {
-		args, ok = decodeToolArgs(quoteBareJSONKeys(argsText))
-		if !ok {
-			return toolCall{}, false
-		}
+	params := paramRe.FindAllStringSubmatch(ib[2], -1)
+	if len(params) == 0 {
+		return toolCall{}, false
 	}
-	return toolCall{Tool: m[1], Args: args}, true
+	args := make(map[string]any, len(params))
+	for _, p := range params {
+		args[p[1]] = decodeParamValue(strings.TrimSpace(html.UnescapeString(p[2])))
+	}
+	return toolCall{Tool: ib[1], Args: args}, true
+}
+
+// decodeParamValue 尝试把逐参数值按 JSON 解码（[]/{}/数字/bool/null），失败则当字符串标量。
+func decodeParamValue(v string) any {
+	var out any
+	if json.NewDecoder(strings.NewReader(v)).Decode(&out) == nil {
+		return out
+	}
+	return v
 }
 
 func decodeToolArgs(s string) (map[string]any, bool) {

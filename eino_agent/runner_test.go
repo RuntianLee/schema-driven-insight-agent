@@ -467,3 +467,72 @@ func TestSystemPrompt_QIDCopyGuidance(t *testing.T) {
 		}
 	}
 }
+
+// TestParseMinimaxPerParameter 验证 MiniMax 原生逐参数 XML（无 name="args" 整块）被解析，
+// 复杂类型值按 JSON 解码，多 invoke 取第一个，args-blob 既有形态回归。
+func TestParseMinimaxPerParameter(t *testing.T) {
+	t.Run("per-parameter typed values", func(t *testing.T) {
+		input := `<minimax:tool_call>
+<invoke name="analyze">
+<parameter name="table">player_basics</parameter>
+<parameter name="group_by">["server_id"]</parameter>
+<parameter name="aggregates">[{"as":"n","fn":"count"}]</parameter>
+</invoke>
+</minimax:tool_call>`
+		got, ok := parseToolCall(input)
+		if !ok {
+			t.Fatal("expected tool call, got none")
+		}
+		if got.Tool != "analyze" {
+			t.Fatalf("tool = %q, want analyze", got.Tool)
+		}
+		if got.Args["table"] != "player_basics" {
+			t.Fatalf("table = %v, want player_basics (string scalar)", got.Args["table"])
+		}
+		gb, ok := got.Args["group_by"].([]any)
+		if !ok || len(gb) != 1 || gb[0] != "server_id" {
+			t.Fatalf("group_by = %v, want [server_id] ([]any)", got.Args["group_by"])
+		}
+		aggs, ok := got.Args["aggregates"].([]any)
+		if !ok || len(aggs) != 1 {
+			t.Fatalf("aggregates not parsed as array: %v", got.Args["aggregates"])
+		}
+	})
+
+	t.Run("multiple invokes takes first", func(t *testing.T) {
+		input := `<minimax:tool_call>
+<invoke name="query_distribution">
+<parameter name="table">player_currencies</parameter>
+</invoke>
+<invoke name="analyze">
+<parameter name="table">player_basics</parameter>
+</invoke>
+</minimax:tool_call>`
+		got, ok := parseToolCall(input)
+		if !ok || got.Tool != "query_distribution" {
+			t.Fatalf("got (%q,%v), want first invoke query_distribution", got.Tool, ok)
+		}
+	})
+
+	t.Run("args-blob regression still works", func(t *testing.T) {
+		input := `<minimax:tool_call>
+<invoke name="analyze">
+<parameter name="args">{"table":"player_basics","aggregates":[{"as":"n","fn":"count"}]}</parameter>
+</invoke>
+</minimax:tool_call>`
+		got, ok := parseToolCall(input)
+		if !ok || got.Tool != "analyze" {
+			t.Fatalf("got (%q,%v), want analyze via args-blob", got.Tool, ok)
+		}
+		if got.Args["table"] != "player_basics" {
+			t.Fatalf("args-blob table = %v, want player_basics", got.Args["table"])
+		}
+	})
+
+	t.Run("invoke without parameters is not a tool call", func(t *testing.T) {
+		input := `<minimax:tool_call><invoke name="analyze"></invoke></minimax:tool_call>`
+		if _, ok := parseToolCall(input); ok {
+			t.Fatal("invoke with no <parameter> should not parse as tool call")
+		}
+	})
+}
