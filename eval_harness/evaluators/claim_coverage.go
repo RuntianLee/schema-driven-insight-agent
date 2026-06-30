@@ -15,8 +15,10 @@ import (
 // Analyst 自产归因块比对，输出 coverage_rate 软信号（Pass 永远 false，不进 CI gate）。
 type ClaimCoverage struct{ client llm.Client }
 
-// NewClaimCoverage 注入 LLM client，构造 ClaimCoverage evaluator。
-func NewClaimCoverage(client llm.Client) *ClaimCoverage { return &ClaimCoverage{client: client} }
+// NewClaimCoverage 注入 LLM client（经 tuneJudge 套纯抽取 profile：thinking off）。
+func NewClaimCoverage(client llm.Client) *ClaimCoverage {
+	return &ClaimCoverage{client: tuneJudge(client, claimCoverageProfile)}
+}
 
 func (c *ClaimCoverage) Name() string        { return "claim_coverage" }
 func (c *ClaimCoverage) Deterministic() bool { return false }

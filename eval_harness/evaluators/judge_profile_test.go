@@ -58,3 +58,26 @@ func TestJudgeProfiles_Values(t *testing.T) {
 		t.Fatalf("judgeMaxTokens = %d, want 8000", judgeMaxTokens)
 	}
 }
+
+func TestJudgeConstructors_ApplyCorrectProfile(t *testing.T) {
+	// claim_coverage：纯抽取 → thinking off
+	spyCC := &spyProfiler{Client: NewMockJudge()}
+	NewClaimCoverage(spyCC)
+	if spyCC.gotMax != 8000 || !spyCC.gotDisable {
+		t.Fatalf("claim_coverage profile 错: max=%d disable=%v", spyCC.gotMax, spyCC.gotDisable)
+	}
+
+	// reasoning_quality：打分 → thinking on
+	spyRQ := &spyProfiler{Client: NewMockJudge()}
+	NewReasoningQuality(spyRQ)
+	if spyRQ.gotMax != 8000 || spyRQ.gotDisable {
+		t.Fatalf("reasoning_quality profile 错: max=%d disable=%v", spyRQ.gotMax, spyRQ.gotDisable)
+	}
+
+	// insight_novelty：打分 → thinking on
+	spyIN := &spyProfiler{Client: NewMockJudge()}
+	NewInsightNovelty(spyIN)
+	if spyIN.gotMax != 8000 || spyIN.gotDisable {
+		t.Fatalf("insight_novelty profile 错: max=%d disable=%v", spyIN.gotMax, spyIN.gotDisable)
+	}
+}
