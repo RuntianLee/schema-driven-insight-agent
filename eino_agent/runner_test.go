@@ -535,4 +535,18 @@ func TestParseMinimaxPerParameter(t *testing.T) {
 			t.Fatal("invoke with no <parameter> should not parse as tool call")
 		}
 	})
+
+	t.Run("numeric-looking string not silently truncated", func(t *testing.T) {
+		input := `<minimax:tool_call><invoke name="analyze"><parameter name="note">42abc</parameter><parameter name="n">42</parameter></invoke></minimax:tool_call>`
+		got, ok := parseToolCall(input)
+		if !ok {
+			t.Fatal("expected tool call")
+		}
+		if got.Args["note"] != "42abc" {
+			t.Fatalf("note = %v (%T), want string \"42abc\" (no silent truncation)", got.Args["note"], got.Args["note"])
+		}
+		if got.Args["n"] != float64(42) {
+			t.Fatalf("n = %v (%T), want float64(42)", got.Args["n"], got.Args["n"])
+		}
+	})
 }

@@ -197,6 +197,7 @@ func parseMinimaxXMLToolCall(s string) (toolCall, bool) {
 			return toolCall{Tool: m[1], Args: args}, true
 		}
 		// args-blob 命中签名但 JSON 坏 → 继续逐参数兜底，不在此 return false。
+		// 降级后逐参数会把 name="args" 当普通 key（args["args"]=raw），属可接受的行为降级。
 	}
 
 	// 2) 逐参数兜底：第一个 <invoke> + 其 <parameter>。
@@ -215,10 +216,11 @@ func parseMinimaxXMLToolCall(s string) (toolCall, bool) {
 	return toolCall{Tool: ib[1], Args: args}, true
 }
 
-// decodeParamValue 尝试把逐参数值按 JSON 解码（[]/{}/数字/bool/null），失败则当字符串标量。
+// decodeParamValue 尝试把逐参数值按 JSON 严格解码（[]/{}/数字/bool/null，必须消耗全部输入），
+// 失败则当字符串标量——避免 "42abc" 被误解成 42 而丢尾部（静默错值）。
 func decodeParamValue(v string) any {
 	var out any
-	if json.NewDecoder(strings.NewReader(v)).Decode(&out) == nil {
+	if json.Unmarshal([]byte(v), &out) == nil {
 		return out
 	}
 	return v
