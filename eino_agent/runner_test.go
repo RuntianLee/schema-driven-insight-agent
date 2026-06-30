@@ -607,3 +607,25 @@ func TestParseOpenAIJSON(t *testing.T) {
 		got.Args["x"] = 1 // 不能 panic
 	})
 }
+
+// TestParseTaggedJSON 验证家族B：<tool_call>{json}</tool_call> 与 [TOOL_CALLS][{json}]，
+// 内层单对象或数组取第一；散文里夹标记但内无合法工具对象不得误报。
+func TestParseTaggedJSON(t *testing.T) {
+	t.Run("hermes tool_call object", func(t *testing.T) {
+		got, ok := parseToolCall(`<tool_call>{"name":"analyze","arguments":{"table":"pb"}}</tool_call>`)
+		if !ok || got.Tool != "analyze" || got.Args["table"] != "pb" {
+			t.Fatalf("got (%q,%v) args=%v", got.Tool, ok, got.Args)
+		}
+	})
+	t.Run("mistral TOOL_CALLS array first", func(t *testing.T) {
+		got, ok := parseToolCall(`[TOOL_CALLS][{"name":"query_distribution","arguments":{"table":"pc"}}]`)
+		if !ok || got.Tool != "query_distribution" || got.Args["table"] != "pc" {
+			t.Fatalf("got (%q,%v) args=%v", got.Tool, ok, got.Args)
+		}
+	})
+	t.Run("prose mentioning tool_call tag does not false-positive", func(t *testing.T) {
+		if _, ok := parseToolCall("可以用 <tool_call> 这种标签来调用工具，但这只是说明。"); ok {
+			t.Fatal("prose with empty/no-json <tool_call> mention should not parse")
+		}
+	})
+}

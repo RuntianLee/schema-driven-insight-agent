@@ -171,8 +171,44 @@ func parseProjectJSONToolCall(s string) (toolCall, bool) {
 	return decodeToolCall(quoteBareJSONKeys(s[start:]))
 }
 
-// 占位：家族B 探测器在后续任务实现，此处先始终返回 false 以编译通过。
-func parseTaggedJSONToolCall(s string) (toolCall, bool) { return toolCall{}, false }
+// toolCallTagRe 抓 <tool_call>…</tool_call> 内层（Hermes/Qwen）。
+var toolCallTagRe = regexp.MustCompile(`(?s)<tool_call>\s*(.*?)\s*</tool_call>`)
+
+// mistralTagRe 抓 [TOOL_CALLS] 之后到串尾的内容（Mistral/Llama 风格）。
+var mistralTagRe = regexp.MustCompile(`(?s)\[TOOL_CALLS\]\s*(.*)`)
+
+// parseTaggedJSONToolCall 解析家族B：标记包裹的 JSON 工具调用。
+// 内层走 toolCallFromObject（deferToProject=false：标记已是强信号、不让位）。
+func parseTaggedJSONToolCall(s string) (toolCall, bool) {
+	if m := toolCallTagRe.FindStringSubmatch(s); len(m) == 2 {
+		if c, ok := decodeTaggedInner(m[1]); ok {
+			return c, true
+		}
+	}
+	if m := mistralTagRe.FindStringSubmatch(s); len(m) == 2 {
+		if c, ok := decodeTaggedInner(m[1]); ok {
+			return c, true
+		}
+	}
+	return toolCall{}, false
+}
+
+// decodeTaggedInner 解析标记内层：数组 [{...}] 取第一个对象，或单个 {...}。
+func decodeTaggedInner(inner string) (toolCall, bool) {
+	inner = strings.TrimSpace(inner)
+	if strings.HasPrefix(inner, "[") {
+		var arr []json.RawMessage
+		if json.NewDecoder(strings.NewReader(inner)).Decode(&arr) == nil && len(arr) > 0 {
+			return toolCallFromObject(arr[0], false)
+		}
+		return toolCall{}, false
+	}
+	start := strings.Index(inner, "{")
+	if start < 0 {
+		return toolCall{}, false
+	}
+	return toolCallFromObject([]byte(inner[start:]), false)
+}
 
 // parseOpenAIJSONToolCall 解析 OpenAI 式 {name, arguments/parameters/input}（家族A）。
 // 首个 { 起；含 tool 键则让位给项目探测器。补裸键引号重试以容错。
