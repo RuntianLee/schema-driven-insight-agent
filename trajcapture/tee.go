@@ -24,6 +24,12 @@ func (t *Tee) RecordLLMCall(prompt, response, model string, tokensIn, tokensOut 
 	t.rec.RecordLLMCall(prompt, response, model, tokensIn, tokensOut, costUSD, started, ended, err)
 }
 
+func (t *Tee) RecordLLMCallRole(role, prompt, response, model string, tokensIn, tokensOut int,
+	costUSD float64, started, ended time.Time, err error) {
+	t.cap.RecordLLMCallRole(role, prompt, response, model, tokensIn, tokensOut, costUSD, started, ended, err)
+	t.rec.RecordLLMCallRole(role, prompt, response, model, tokensIn, tokensOut, costUSD, started, ended, err)
+}
+
 func (t *Tee) RecordToolCall(name string, input, output any, started, ended time.Time, err error) {
 	t.cap.RecordToolCall(name, input, output, started, ended, err)
 	t.rec.RecordToolCall(name, input, output, started, ended, err)

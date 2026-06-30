@@ -27,6 +27,8 @@ func (c *Capture) TrajectoryID() string { return "capture" }
 
 func (c *Capture) RecordLLMCall(_, _, _ string, _, _ int, _ float64, _, _ time.Time, _ error) {}
 
+func (c *Capture) RecordLLMCallRole(_, _, _, _ string, _, _ int, _ float64, _, _ time.Time, _ error) {}
+
 func (c *Capture) RecordToolCall(name string, input, output any, _, _ time.Time, err error) {
 	tc := contract.ToolCall{Name: name, Err: err}
 	// eino_agent 的 ToolDispatcher 始终以 map[string]any 传入参；非 map（理论不出现）则 Args 留 nil。

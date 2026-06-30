@@ -11,6 +11,8 @@ type TrajectoryStore interface {
 	TrajectoryID() string
 	RecordLLMCall(prompt, response, model string, tokensIn, tokensOut int,
 		costUSD float64, started, ended time.Time, err error)
+	RecordLLMCallRole(role, prompt, response, model string, tokensIn, tokensOut int,
+		costUSD float64, started, ended time.Time, err error)
 	RecordToolCall(toolName string, input, output any, started, ended time.Time, err error)
 	RecordReasoning(thought string, started, ended time.Time)
 	Finalize(ctx context.Context, outcome, finalOutput, errSummary string) error
