@@ -15,3 +15,4 @@ config/llm.yaml
 # Anchored + suffixed to avoid matching the agent/ and examples/*/seed/ PACKAGE dirs.
 /agent.bin
 /seed.bin
+/attr-audit

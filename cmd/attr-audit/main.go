@@ -23,6 +23,21 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// toolCallSignatures 是四大格式家族「未被执行的工具调用」在最终答案里的特征标记。
+// 修复后 agent 的工具调用应成为 tool_call step、不再出现在 final_output；
+// 若仍出现，说明该格式形态被解析器漏掉（泄漏）。顺序=优先报告更具体的外层壳。
+var toolCallSignatures = []string{"<minimax:tool_call>", "<invoke", "<tool_call>", "[TOOL_CALLS]"}
+
+// detectToolCallLeak 检测一段最终答案是否是「未执行的工具调用泄漏」，返回命中的签名。
+func detectToolCallLeak(finalOutput string) (string, bool) {
+	for _, sig := range toolCallSignatures {
+		if strings.Contains(finalOutput, sig) {
+			return sig, true
+		}
+	}
+	return "", false
+}
+
 // oldStrictParse 复刻修复前 float64 严解的 all-or-nothing 行为，返回解出的 claim 数（解码失败=0）。
 func oldStrictParse(raw string) int {
 	const needle = `{"attribution":`
@@ -101,8 +116,9 @@ func (s resolveStats) String() string {
 
 func main() {
 	resolveMode := flag.Bool("resolve", false, "对每条归因块 claim 跑 EvalAnchor，统计 resolved/mismatch/unresolvable")
+	xmlLeakMode := flag.Bool("xmlleak", false, "扫 final_output 标记未执行工具调用泄漏（四家族签名）")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "用法: attr-audit [-resolve] <*.db | dir>...")
+		fmt.Fprintln(os.Stderr, "用法: attr-audit [-resolve] [-xmlleak] <*.db | dir>...")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -123,7 +139,7 @@ func main() {
 		}
 	}
 
-	var total, hadBlock, recovered, multiplierHits int
+	var total, hadBlock, recovered, multiplierHits, leakHits int
 
 	// -resolve 模式的全局计数
 	var resTotal, resResolved, resMismatch, resUnresolvable int
@@ -147,6 +163,12 @@ func main() {
 				continue
 			}
 			total++
+			if *xmlLeakMode {
+				if sig, leaked := detectToolCallLeak(fo); leaked {
+					leakHits++
+					fmt.Printf("XMLLEAK %s::%s  sig=%q\n", filepath.Base(p), id, sig)
+				}
+			}
 			if !strings.Contains(fo, `{"attribution":`) {
 				continue
 			}
@@ -207,6 +229,10 @@ func main() {
 	fmt.Printf("含归因块: %d\n", hadBlock)
 	fmt.Printf("parse 假失败可恢复（旧0/新≥1）: %d\n", recovered)
 	fmt.Printf("倍率词探针命中（claimed_value 字符串里数字紧跟 万/亿/千/k/M/B）: %d  —— 若材料性>0 触发倍率缩放档（spec §6）\n", multiplierHits)
+
+	if *xmlLeakMode {
+		fmt.Printf("未执行工具调用泄漏（final_output 含四家族签名）: %d / %d trajectories\n", leakHits, total)
+	}
 
 	if *resolveMode {
 		pct := 0.0
