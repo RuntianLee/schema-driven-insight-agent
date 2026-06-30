@@ -635,3 +635,26 @@ func TestParseTaggedJSON(t *testing.T) {
 		}
 	})
 }
+
+// TestDetectorOrderingAndGuards 锁定探测器优先级与负向防误报，作回归守护。
+func TestDetectorOrderingAndGuards(t *testing.T) {
+	t.Run("xml preferred over inner json brace", func(t *testing.T) {
+		// 逐参数 XML 内含 JSON 值，必须走家族C（tool=analyze），不被裸 { 抢成 JSON。
+		input := `<minimax:tool_call><invoke name="analyze"><parameter name="group_by">["server_id"]</parameter></invoke></minimax:tool_call>`
+		got, ok := parseToolCall(input)
+		if !ok || got.Tool != "analyze" {
+			t.Fatalf("got (%q,%v), want analyze via C", got.Tool, ok)
+		}
+	})
+	t.Run("pure NL no brace stays final answer", func(t *testing.T) {
+		if _, ok := parseToolCall("## 报告\n头部 0.35% 持有 21.62%"); ok {
+			t.Fatal("pure NL should not parse as tool call")
+		}
+	})
+	t.Run("project format unaffected by openai detector", func(t *testing.T) {
+		got, ok := parseToolCall(`{"tool":"analyze","args":{"table":"pb"}}`)
+		if !ok || got.Tool != "analyze" || got.Args["table"] != "pb" {
+			t.Fatalf("got (%q,%v) args=%v, want project-format analyze", got.Tool, ok, got.Args)
+		}
+	})
+}
