@@ -226,6 +226,9 @@ func toolCallFromObject(obj []byte, deferToProject bool) (toolCall, bool) {
 		}
 		break
 	}
+	if args == nil {
+		args = map[string]any{}
+	}
 	return toolCall{Tool: name, Args: args}, true
 }
 

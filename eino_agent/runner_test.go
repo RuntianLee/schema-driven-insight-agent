@@ -588,4 +588,22 @@ func TestParseOpenAIJSON(t *testing.T) {
 			t.Fatal("stray object without name/tool should not parse")
 		}
 	})
+
+	t.Run("name null or non-string is not a tool call", func(t *testing.T) {
+		for _, in := range []string{`{"name":null,"arguments":{}}`, `{"name":42,"arguments":{}}`} {
+			if _, ok := parseToolCall(in); ok {
+				t.Fatalf("input %q: non-string name should not parse", in)
+			}
+		}
+	})
+	t.Run("arguments null yields empty args not nil", func(t *testing.T) {
+		got, ok := parseToolCall(`{"name":"analyze","arguments":null}`)
+		if !ok || got.Tool != "analyze" {
+			t.Fatalf("got (%q,%v), want analyze", got.Tool, ok)
+		}
+		if got.Args == nil {
+			t.Fatal("Args should be empty map, not nil")
+		}
+		got.Args["x"] = 1 // 不能 panic
+	})
 }
