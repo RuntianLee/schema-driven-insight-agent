@@ -48,8 +48,8 @@ type requestBody struct {
 
 func main() {
 	// ── 读配置（与生产代码相同的来源）────────────────────────────────────────
-	// endpoint 和 api_key 硬编码自 data_analysis_agent/config/llm.yaml（gitignored 私有配置）
-	// 实际运行时可用环境变量覆盖：PROBE_ENDPOINT / PROBE_API_KEY
+	// endpoint/model 默认值取自环境变量（PROBE_ENDPOINT / PROBE_MODEL），api_key 必须由
+	// PROBE_API_KEY 提供——无任何 secret 入库；默认 endpoint 同 config/llm.yaml 的 okaoi 网关。
 	endpoint := getEnv("PROBE_ENDPOINT", "https://www.okaoi.com/v1/messages")
 	apiKey := getEnv("PROBE_API_KEY", "")
 	model := getEnv("PROBE_MODEL", "MiniMax-M2.7")
