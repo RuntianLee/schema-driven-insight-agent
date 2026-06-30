@@ -22,6 +22,12 @@ type anthropicReq struct {
 	Messages    []anthropicMessage `json:"messages"`
 	System      string             `json:"system,omitempty"`
 	Temperature *float64           `json:"temperature,omitempty"`
+	Thinking    *anthropicThinking `json:"thinking,omitempty"`
+}
+
+// anthropicThinking 控制扩展思考；{type:"disabled"} 显式关闭（judge 抽取/打分用）。
+type anthropicThinking struct {
+	Type string `json:"type"`
 }
 
 type anthropicMessage struct {
@@ -55,12 +61,16 @@ func (c *minimaxClient) callAnthropic(ctx context.Context, prompt string) (strin
 	if maxTokens <= 0 {
 		maxTokens = anthropicDefaultMaxTokens
 	}
-	body, _ := json.Marshal(anthropicReq{
+	reqBody := anthropicReq{
 		Model:       c.model,
 		MaxTokens:   maxTokens,
 		Messages:    []anthropicMessage{{Role: "user", Content: prompt}},
 		Temperature: c.temperature,
-	})
+	}
+	if c.disableThinking {
+		reqBody.Thinking = &anthropicThinking{Type: "disabled"}
+	}
+	body, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", 0, 0, 0, err

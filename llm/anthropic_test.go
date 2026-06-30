@@ -156,6 +156,51 @@ func TestAnthropicCall_Non2xxSurfacesBody(t *testing.T) {
 	}
 }
 
+func TestAnthropicCall_ThinkingDisabledSerialized(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Write([]byte(`{"type":"message","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	base := newMiniMaxFull("k", "m", srv.URL, 5*time.Second, 2000, nil, "anthropic").(*minimaxClient)
+	judge := base.WithJudgeProfile(8000, true)
+	if _, _, _, _, err := judge.Call(context.Background(), "hi"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req map[string]any
+	if err := json.Unmarshal(gotBody, &req); err != nil {
+		t.Fatalf("body 非 JSON: %v", err)
+	}
+	if req["max_tokens"] != float64(8000) {
+		t.Fatalf("max_tokens = %v, want 8000", req["max_tokens"])
+	}
+	th, ok := req["thinking"].(map[string]any)
+	if !ok || th["type"] != "disabled" {
+		t.Fatalf("thinking 应为 {type:disabled}，得 %v", req["thinking"])
+	}
+}
+
+func TestAnthropicCall_ThinkingOmittedByDefault(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Write([]byte(`{"type":"message","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	c := newAnthropicTestClient(srv.URL, 8000)
+	if _, _, _, _, err := c.Call(context.Background(), "hi"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req map[string]any
+	json.Unmarshal(gotBody, &req)
+	if _, present := req["thinking"]; present {
+		t.Fatalf("disableThinking=false 时不应发 thinking 字段，得 %v", req["thinking"])
+	}
+}
+
 // --- config 层 ---
 
 func TestParseMiniMaxConfig_FormatDefaultOpenAI(t *testing.T) {
