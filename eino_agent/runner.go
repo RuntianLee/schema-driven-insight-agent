@@ -175,6 +175,7 @@ func parseProjectJSONToolCall(s string) (toolCall, bool) {
 var toolCallTagRe = regexp.MustCompile(`(?s)<tool_call>\s*(.*?)\s*</tool_call>`)
 
 // mistralTagRe 抓 [TOOL_CALLS] 之后到串尾的内容（Mistral/Llama 风格）。
+// (.*) 贪婪吸到串尾的尾部散文由 decodeTaggedInner 的 json.Decoder 容忍（停在合法 JSON 尾）。
 var mistralTagRe = regexp.MustCompile(`(?s)\[TOOL_CALLS\]\s*(.*)`)
 
 // parseTaggedJSONToolCall 解析家族B：标记包裹的 JSON 工具调用。

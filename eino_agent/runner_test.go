@@ -623,6 +623,12 @@ func TestParseTaggedJSON(t *testing.T) {
 			t.Fatalf("got (%q,%v) args=%v", got.Tool, ok, got.Args)
 		}
 	})
+	t.Run("mistral TOOL_CALLS array multi takes first", func(t *testing.T) {
+		got, ok := parseToolCall(`[TOOL_CALLS][{"name":"first","arguments":{"table":"a"}},{"name":"second","arguments":{"table":"b"}}]`)
+		if !ok || got.Tool != "first" || got.Args["table"] != "a" {
+			t.Fatalf("got (%q,%v) args=%v, want first/a", got.Tool, ok, got.Args)
+		}
+	})
 	t.Run("prose mentioning tool_call tag does not false-positive", func(t *testing.T) {
 		if _, ok := parseToolCall("可以用 <tool_call> 这种标签来调用工具，但这只是说明。"); ok {
 			t.Fatal("prose with empty/no-json <tool_call> mention should not parse")
