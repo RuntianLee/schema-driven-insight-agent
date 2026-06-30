@@ -16,3 +16,4 @@ config/llm.yaml
 /agent.bin
 /seed.bin
 /attr-audit
+/gateway-tools-probe
