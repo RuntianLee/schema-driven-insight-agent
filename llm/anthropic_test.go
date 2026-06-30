@@ -201,6 +201,22 @@ func TestAnthropicCall_ThinkingOmittedByDefault(t *testing.T) {
 	}
 }
 
+func TestAnthropicCall_ThinkingAteBudgetDiagnostic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"type":"message","content":[{"type":"thinking","text":"推理中..."}],"stop_reason":"max_tokens","usage":{"input_tokens":5,"output_tokens":100}}`))
+	}))
+	defer srv.Close()
+
+	c := newAnthropicTestClient(srv.URL, 100)
+	_, _, _, _, err := c.Call(context.Background(), "hi")
+	if err == nil {
+		t.Fatal("应报错（空 text 块）")
+	}
+	if !strings.Contains(err.Error(), "thinking") || !strings.Contains(err.Error(), "max_tokens") {
+		t.Fatalf("诊断文案应点名 thinking + max_tokens，得: %v", err)
+	}
+}
+
 // --- config 层 ---
 
 func TestParseMiniMaxConfig_FormatDefaultOpenAI(t *testing.T) {

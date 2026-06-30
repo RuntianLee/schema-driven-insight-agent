@@ -108,6 +108,10 @@ func (c *minimaxClient) callAnthropic(ctx context.Context, prompt string) (strin
 	}
 	content := sb.String()
 	if content == "" {
+		// thinking 吃光预算的可诊断形态：stop_reason=max_tokens 且有块但无 text。
+		if r.StopReason == "max_tokens" && len(r.Content) > 0 {
+			return "", tokIn, tokOut, cost, fmt.Errorf("anthropic: thinking 吃光 max_tokens=%d、无 text 块；提高 judge 预算或关该 judge 的 thinking; body=%s", maxTokens, string(raw))
+		}
 		// 无 text 块 / 全空 → 返回可诊断错误（带原始 body），不静默空串。
 		return "", tokIn, tokOut, cost, fmt.Errorf("anthropic: empty content（无 text 块或全空）; body=%s", string(raw))
 	}
