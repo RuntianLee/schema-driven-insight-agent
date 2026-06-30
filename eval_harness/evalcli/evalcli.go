@@ -151,9 +151,9 @@ func runPass(
 		evalReg.Register(evaluators.NewDataCorrectness())
 		evalReg.Register(evaluators.NewAdvisorGrounding())
 		evalReg.Register(evaluators.NewAttributionGrounding())
-		evalReg.Register(evaluators.NewClaimCoverage(judge))
-		evalReg.Register(evaluators.NewReasoningQuality(judge))
-		evalReg.Register(evaluators.NewInsightNovelty(judge))
+		evalReg.Register(evaluators.NewClaimCoverage(evaluators.NewRecordingClient(judge, "judge:claim_coverage")))
+		evalReg.Register(evaluators.NewReasoningQuality(evaluators.NewRecordingClient(judge, "judge:reasoning_quality")))
+		evalReg.Register(evaluators.NewInsightNovelty(evaluators.NewRecordingClient(judge, "judge:insight_novelty")))
 
 		rep, err := runners.RunSuite(context.Background(), runners.Config{
 			Dispatcher:         reg,
