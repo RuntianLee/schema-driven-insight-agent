@@ -212,8 +212,8 @@ func TestAnthropicCall_ThinkingAteBudgetDiagnostic(t *testing.T) {
 	if err == nil {
 		t.Fatal("应报错（空 text 块）")
 	}
-	if !strings.Contains(err.Error(), "thinking") || !strings.Contains(err.Error(), "max_tokens") {
-		t.Fatalf("诊断文案应点名 thinking + max_tokens，得: %v", err)
+	if !strings.Contains(err.Error(), "吃光") || !strings.Contains(err.Error(), "提高 judge 预算") {
+		t.Fatalf("诊断文案应是结构化「thinking 吃光…提高 judge 预算」专属形态，得: %v", err)
 	}
 }
 
