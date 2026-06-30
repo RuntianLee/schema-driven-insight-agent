@@ -467,3 +467,194 @@ func TestSystemPrompt_QIDCopyGuidance(t *testing.T) {
 		}
 	}
 }
+
+// TestParseMinimaxPerParameter 验证 MiniMax 原生逐参数 XML（无 name="args" 整块）被解析，
+// 复杂类型值按 JSON 解码，多 invoke 取第一个，args-blob 既有形态回归。
+func TestParseMinimaxPerParameter(t *testing.T) {
+	t.Run("per-parameter typed values", func(t *testing.T) {
+		input := `<minimax:tool_call>
+<invoke name="analyze">
+<parameter name="table">player_basics</parameter>
+<parameter name="group_by">["server_id"]</parameter>
+<parameter name="aggregates">[{"as":"n","fn":"count"}]</parameter>
+</invoke>
+</minimax:tool_call>`
+		got, ok := parseToolCall(input)
+		if !ok {
+			t.Fatal("expected tool call, got none")
+		}
+		if got.Tool != "analyze" {
+			t.Fatalf("tool = %q, want analyze", got.Tool)
+		}
+		if got.Args["table"] != "player_basics" {
+			t.Fatalf("table = %v, want player_basics (string scalar)", got.Args["table"])
+		}
+		gb, ok := got.Args["group_by"].([]any)
+		if !ok || len(gb) != 1 || gb[0] != "server_id" {
+			t.Fatalf("group_by = %v, want [server_id] ([]any)", got.Args["group_by"])
+		}
+		aggs, ok := got.Args["aggregates"].([]any)
+		if !ok || len(aggs) != 1 {
+			t.Fatalf("aggregates not parsed as array: %v", got.Args["aggregates"])
+		}
+	})
+
+	t.Run("multiple invokes takes first", func(t *testing.T) {
+		input := `<minimax:tool_call>
+<invoke name="query_distribution">
+<parameter name="table">player_currencies</parameter>
+</invoke>
+<invoke name="analyze">
+<parameter name="table">player_basics</parameter>
+</invoke>
+</minimax:tool_call>`
+		got, ok := parseToolCall(input)
+		if !ok || got.Tool != "query_distribution" {
+			t.Fatalf("got (%q,%v), want first invoke query_distribution", got.Tool, ok)
+		}
+	})
+
+	t.Run("args-blob regression still works", func(t *testing.T) {
+		input := `<minimax:tool_call>
+<invoke name="analyze">
+<parameter name="args">{"table":"player_basics","aggregates":[{"as":"n","fn":"count"}]}</parameter>
+</invoke>
+</minimax:tool_call>`
+		got, ok := parseToolCall(input)
+		if !ok || got.Tool != "analyze" {
+			t.Fatalf("got (%q,%v), want analyze via args-blob", got.Tool, ok)
+		}
+		if got.Args["table"] != "player_basics" {
+			t.Fatalf("args-blob table = %v, want player_basics", got.Args["table"])
+		}
+	})
+
+	t.Run("invoke without parameters is not a tool call", func(t *testing.T) {
+		input := `<minimax:tool_call><invoke name="analyze"></invoke></minimax:tool_call>`
+		if _, ok := parseToolCall(input); ok {
+			t.Fatal("invoke with no <parameter> should not parse as tool call")
+		}
+	})
+
+	t.Run("numeric-looking string not silently truncated", func(t *testing.T) {
+		input := `<minimax:tool_call><invoke name="analyze"><parameter name="note">42abc</parameter><parameter name="n">42</parameter></invoke></minimax:tool_call>`
+		got, ok := parseToolCall(input)
+		if !ok {
+			t.Fatal("expected tool call")
+		}
+		if got.Args["note"] != "42abc" {
+			t.Fatalf("note = %v (%T), want string \"42abc\" (no silent truncation)", got.Args["note"], got.Args["note"])
+		}
+		if got.Args["n"] != float64(42) {
+			t.Fatalf("n = %v (%T), want float64(42)", got.Args["n"], got.Args["n"])
+		}
+	})
+}
+
+// TestParseOpenAIJSON 验证 OpenAI 式 {name, arguments/parameters/input} 被解析，
+// arguments 支持对象与 JSON 字符串两种形态，含 tool 键则让位给项目格式。
+func TestParseOpenAIJSON(t *testing.T) {
+	cases := []struct {
+		name, input, wantTool string
+		wantTable             string
+	}{
+		{"name+arguments object", `{"name":"analyze","arguments":{"table":"player_basics"}}`, "analyze", "player_basics"},
+		{"name+parameters object", `{"name":"analyze","parameters":{"table":"pb"}}`, "analyze", "pb"},
+		{"name+arguments string-encoded", `{"name":"analyze","arguments":"{\"table\":\"pc\"}"}`, "analyze", "pc"},
+		{"name+input object", `{"name":"analyze","input":{"table":"pi"}}`, "analyze", "pi"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseToolCall(tc.input)
+			if !ok || got.Tool != tc.wantTool {
+				t.Fatalf("got (%q,%v), want %q", got.Tool, ok, tc.wantTool)
+			}
+			if got.Args["table"] != tc.wantTable {
+				t.Fatalf("table = %v, want %v", got.Args["table"], tc.wantTable)
+			}
+		})
+	}
+
+	t.Run("project format defers to project detector", func(t *testing.T) {
+		// {tool,args} 含 tool 键 → OpenAI 探测器让位、由项目探测器解。
+		got, ok := parseToolCall(`{"tool":"query_distribution","args":{"table":"x"}}`)
+		if !ok || got.Tool != "query_distribution" {
+			t.Fatalf("got (%q,%v), want query_distribution", got.Tool, ok)
+		}
+	})
+
+	t.Run("object without name or tool is not a tool call", func(t *testing.T) {
+		if _, ok := parseToolCall(`参考 {"bucket":"0~1w"} 的数据`); ok {
+			t.Fatal("stray object without name/tool should not parse")
+		}
+	})
+
+	t.Run("name null or non-string is not a tool call", func(t *testing.T) {
+		for _, in := range []string{`{"name":null,"arguments":{}}`, `{"name":42,"arguments":{}}`} {
+			if _, ok := parseToolCall(in); ok {
+				t.Fatalf("input %q: non-string name should not parse", in)
+			}
+		}
+	})
+	t.Run("arguments null yields empty args not nil", func(t *testing.T) {
+		got, ok := parseToolCall(`{"name":"analyze","arguments":null}`)
+		if !ok || got.Tool != "analyze" {
+			t.Fatalf("got (%q,%v), want analyze", got.Tool, ok)
+		}
+		if got.Args == nil {
+			t.Fatal("Args should be empty map, not nil")
+		}
+		got.Args["x"] = 1 // 不能 panic
+	})
+}
+
+// TestParseTaggedJSON 验证家族B：<tool_call>{json}</tool_call> 与 [TOOL_CALLS][{json}]，
+// 内层单对象或数组取第一；散文里夹标记但内无合法工具对象不得误报。
+func TestParseTaggedJSON(t *testing.T) {
+	t.Run("hermes tool_call object", func(t *testing.T) {
+		got, ok := parseToolCall(`<tool_call>{"name":"analyze","arguments":{"table":"pb"}}</tool_call>`)
+		if !ok || got.Tool != "analyze" || got.Args["table"] != "pb" {
+			t.Fatalf("got (%q,%v) args=%v", got.Tool, ok, got.Args)
+		}
+	})
+	t.Run("mistral TOOL_CALLS array first", func(t *testing.T) {
+		got, ok := parseToolCall(`[TOOL_CALLS][{"name":"query_distribution","arguments":{"table":"pc"}}]`)
+		if !ok || got.Tool != "query_distribution" || got.Args["table"] != "pc" {
+			t.Fatalf("got (%q,%v) args=%v", got.Tool, ok, got.Args)
+		}
+	})
+	t.Run("mistral TOOL_CALLS array multi takes first", func(t *testing.T) {
+		got, ok := parseToolCall(`[TOOL_CALLS][{"name":"first","arguments":{"table":"a"}},{"name":"second","arguments":{"table":"b"}}]`)
+		if !ok || got.Tool != "first" || got.Args["table"] != "a" {
+			t.Fatalf("got (%q,%v) args=%v, want first/a", got.Tool, ok, got.Args)
+		}
+	})
+	t.Run("prose mentioning tool_call tag does not false-positive", func(t *testing.T) {
+		if _, ok := parseToolCall("可以用 <tool_call> 这种标签来调用工具，但这只是说明。"); ok {
+			t.Fatal("prose with empty/no-json <tool_call> mention should not parse")
+		}
+	})
+}
+
+// TestDetectorOrderingAndGuards 锁定探测器优先级与负向防误报，作回归守护。
+func TestDetectorOrderingAndGuards(t *testing.T) {
+	t.Run("xml preferred over inner json brace", func(t *testing.T) {
+		// 逐参数 XML 内含 JSON 值，必须走家族C（tool=analyze），不被裸 { 抢成 JSON。
+		input := `<minimax:tool_call><invoke name="analyze"><parameter name="group_by">["server_id"]</parameter></invoke></minimax:tool_call>`
+		got, ok := parseToolCall(input)
+		if !ok || got.Tool != "analyze" {
+			t.Fatalf("got (%q,%v), want analyze via C", got.Tool, ok)
+		}
+	})
+	t.Run("pure NL no brace stays final answer", func(t *testing.T) {
+		if _, ok := parseToolCall("## 报告\n头部 0.35% 持有 21.62%"); ok {
+			t.Fatal("pure NL should not parse as tool call")
+		}
+	})
+	t.Run("project format unaffected by openai detector", func(t *testing.T) {
+		got, ok := parseToolCall(`{"tool":"analyze","args":{"table":"pb"}}`)
+		if !ok || got.Tool != "analyze" || got.Args["table"] != "pb" {
+			t.Fatalf("got (%q,%v) args=%v, want project-format analyze", got.Tool, ok, got.Args)
+		}
+	})
+}
