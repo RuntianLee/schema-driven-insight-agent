@@ -81,3 +81,42 @@ func TestFinalizeIdempotent(t *testing.T) {
 		t.Fatalf("second finalize must not panic: %v", err)
 	}
 }
+
+func TestRecordLLMCallRole_PersistsRoleAndExcludesFromTotal(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := New(context.Background(), db, "v-test", "q?", "benchmark")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	rec.RecordLLMCall("p-agent", "r-agent", "m", 100, 200, 0.001, now, now, nil) // role=agent
+	rec.RecordLLMCallRole("judge:claim_coverage", "p-j", "r-j", "m", 10, 20, 0.002, now, now, nil)
+	if err := rec.Finalize(context.Background(), "success", "out", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// per-step role 落库正确
+	var agentRole, judgeRole string
+	db.QueryRow(`SELECT role FROM trajectory_steps WHERE step_type='llm_call' AND tokens_input=100`).Scan(&agentRole)
+	db.QueryRow(`SELECT role FROM trajectory_steps WHERE step_type='llm_call' AND tokens_input=10`).Scan(&judgeRole)
+	if agentRole != "agent" {
+		t.Fatalf("agent step role = %q, want agent", agentRole)
+	}
+	if judgeRole != "judge:claim_coverage" {
+		t.Fatalf("judge step role = %q, want judge:claim_coverage", judgeRole)
+	}
+
+	// total_tokens 汇总 = agent-only（100+200=300），不含 judge（10+20）
+	var total int
+	db.QueryRow(`SELECT total_tokens FROM trajectories WHERE trajectory_id=?`, rec.TrajectoryID()).Scan(&total)
+	if total != 300 {
+		t.Fatalf("total_tokens = %d, want 300（agent-only，排除 judge）", total)
+	}
+}
