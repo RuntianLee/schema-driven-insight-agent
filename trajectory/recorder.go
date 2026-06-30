@@ -20,6 +20,8 @@ type Recorder interface {
 	TrajectoryID() string
 	RecordLLMCall(prompt, response, model string, tokensIn, tokensOut int,
 		costUSD float64, started, ended time.Time, err error)
+	RecordLLMCallRole(role, prompt, response, model string, tokensIn, tokensOut int,
+		costUSD float64, started, ended time.Time, err error)
 	RecordToolCall(toolName string, input, output any, started, ended time.Time, err error)
 	RecordReasoning(thought string, started, ended time.Time)
 	Finalize(ctx context.Context, outcome, finalOutput, errSummary string) error
@@ -38,6 +40,7 @@ type stepRecord struct {
 	costUSD   float64
 	model     string
 	toolName  string
+	role      string
 }
 
 type recorder struct {
@@ -89,8 +92,10 @@ func (r *recorder) writeLoop() {
 	defer close(r.done)
 	for s := range r.ch {
 		r.persistStep(s)
-		r.totalTokens += s.tokensIn + s.tokensOut
-		r.totalCost += s.costUSD
+		if s.role == "" || s.role == "agent" { // judge/advisor 角色不进汇总（保历史 total 口径）
+			r.totalTokens += s.tokensIn + s.tokensOut
+			r.totalCost += s.costUSD
+		}
 		r.stepCount++
 	}
 }
@@ -105,12 +110,12 @@ func (r *recorder) persistStep(s stepRecord) {
 	_, err := r.db.Exec(
 		`INSERT INTO trajectory_steps
 		 (step_id, trajectory_id, step_index, step_type, started_at, ended_at, latency_ms,
-		  input, output, tokens_input, tokens_output, cost_usd, model_name, tool_name, error)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		  input, output, tokens_input, tokens_output, cost_usd, model_name, tool_name, error, role)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		uuid.NewString(), r.trajID, s.stepIndex, s.stepType,
 		s.started.UnixMilli(), s.ended.UnixMilli(), s.ended.Sub(s.started).Milliseconds(),
 		string(inJSON), string(outJSON), s.tokensIn, s.tokensOut, s.costUSD,
-		nullable(s.model), nullable(s.toolName), errStr)
+		nullable(s.model), nullable(s.toolName), errStr, nullable(s.role))
 	if err != nil {
 		// 永不干扰主流程（trajectory-spec-v2 §2 #4）：仅吞掉。
 		return
@@ -137,7 +142,18 @@ func (r *recorder) RecordLLMCall(prompt, response, model string, tokensIn, token
 	costUSD float64, started, ended time.Time, err error) {
 	ev := Redact(Event{Kind: "llm_call", Input: prompt, Output: response})
 	r.enqueue(stepRecord{
-		stepType: "llm_call", input: ev.Input, output: ev.Output,
+		stepType: "llm_call", role: "agent", input: ev.Input, output: ev.Output,
+		started: started, ended: ended, err: err,
+		tokensIn: tokensIn, tokensOut: tokensOut, costUSD: costUSD, model: model,
+	})
+}
+
+// RecordLLMCallRole 同 RecordLLMCall，但带显式角色标签（judge/advisor 等非 agent 调用用）。
+func (r *recorder) RecordLLMCallRole(role, prompt, response, model string, tokensIn, tokensOut int,
+	costUSD float64, started, ended time.Time, err error) {
+	ev := Redact(Event{Kind: "llm_call", Input: prompt, Output: response})
+	r.enqueue(stepRecord{
+		stepType: "llm_call", role: role, input: ev.Input, output: ev.Output,
 		started: started, ended: ended, err: err,
 		tokensIn: tokensIn, tokensOut: tokensOut, costUSD: costUSD, model: model,
 	})

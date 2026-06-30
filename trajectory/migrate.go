@@ -11,7 +11,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const SchemaVersion = "2"
+const SchemaVersion = "3"
 
 // Open 打开 trajectory.db 并设 WAL 连接参数（trajectory-spec-v2 §3.1）。
 func Open(path string) (*sql.DB, error) {
@@ -48,7 +48,12 @@ func Migrate(db *sql.DB) error {
 	case v == SchemaVersion:
 		return nil
 	case v == "1":
-		return migrateV1toV2(db)
+		if err := migrateV1toV2(db); err != nil {
+			return err
+		}
+		return migrateV2toV3(db)
+	case v == "2":
+		return migrateV2toV3(db)
 	default:
 		return fmt.Errorf("trajectory schema version mismatch: db=%s code=%s; run migrate", v, SchemaVersion)
 	}
@@ -70,10 +75,58 @@ func migrateV1toV2(db *sql.DB) error {
 			return fmt.Errorf("add task_class: %w", err)
 		}
 	}
-	if _, err := tx.Exec(`UPDATE _meta SET value=? WHERE key='schema_version'`, SchemaVersion); err != nil {
-		return fmt.Errorf("bump schema_version: %w", err)
+	// bump 目标用字面 "2"（非 SchemaVersion 常量，现已是 "3"），否则 v1 库会跳过 role 列直接标 3。
+	if _, err := tx.Exec(`UPDATE _meta SET value='2' WHERE key='schema_version'`); err != nil {
+		return fmt.Errorf("bump schema_version v1→v2: %w", err)
 	}
 	return tx.Commit()
+}
+
+// migrateV2toV3：给存量 trajectory_steps 补 role 列（按角色 agent/judge 记 token）。
+// 事务包裹 ALTER + bump；幂等：列已存在则跳过 ALTER。
+func migrateV2toV3(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin migrate v2→v3: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 用 tx 查列存在性：:memory: 库不跨连接共享，故必须在同一事务连接上探测（file 库亦正确）。
+	has, err := txHasColumn(tx, "trajectory_steps", "role")
+	if err != nil {
+		return fmt.Errorf("check role column: %w", err)
+	}
+	if !has {
+		if _, err := tx.Exec(`ALTER TABLE trajectory_steps ADD COLUMN role TEXT`); err != nil {
+			return fmt.Errorf("add role: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`UPDATE _meta SET value='3' WHERE key='schema_version'`); err != nil {
+		return fmt.Errorf("bump schema_version v2→v3: %w", err)
+	}
+	return tx.Commit()
+}
+
+// txHasColumn 与 hasColumn 同义，但在给定事务连接上探测——:memory: 库不跨连接共享，
+// 迁移在 tx 内 ALTER 时必须用同一连接判断幂等性。返回 error 以便迁移在 PRAGMA 失败时回滚。
+func txHasColumn(tx *sql.Tx, table, col string) (bool, error) {
+	rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // hasColumn 用 PRAGMA table_info 判断列是否存在。

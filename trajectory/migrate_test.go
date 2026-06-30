@@ -45,11 +45,14 @@ func TestMigrate_V1ToV2(t *testing.T) {
 
 	var v string
 	db.QueryRow(`SELECT value FROM _meta WHERE key='schema_version'`).Scan(&v)
-	if v != "2" {
-		t.Errorf("schema_version = %q, want 2", v)
+	if v != "3" {
+		t.Errorf("schema_version = %q, want 3", v)
 	}
 	if !hasColumn(db, "trajectories", "task_class") {
 		t.Error("task_class column missing after migrate")
+	}
+	if !hasColumn(db, "trajectory_steps", "role") {
+		t.Error("role column missing after migrate v1→v3")
 	}
 	var tc sql.NullString
 	db.QueryRow(`SELECT task_class FROM trajectories WHERE trajectory_id='old-1'`).Scan(&tc)
@@ -78,8 +81,8 @@ func TestMigrate_FreshDBIsV2(t *testing.T) {
 	}
 	var v string
 	db.QueryRow(`SELECT value FROM _meta WHERE key='schema_version'`).Scan(&v)
-	if v != "2" {
-		t.Errorf("fresh db schema_version = %q, want 2", v)
+	if v != "3" {
+		t.Errorf("fresh db schema_version = %q, want 3", v)
 	}
 	if !hasColumn(db, "trajectories", "task_class") {
 		t.Error("fresh db missing task_class")
@@ -94,5 +97,46 @@ func TestMigrate_Idempotent(t *testing.T) {
 	}
 	if err := Migrate(db); err != nil {
 		t.Fatalf("second Migrate not idempotent: %v", err)
+	}
+}
+
+func TestMigrateV2toV3_AddsRoleColumn(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := Migrate(db); err != nil {
+		t.Fatalf("初次 Migrate: %v", err)
+	}
+	if !hasColumn(db, "trajectory_steps", "role") {
+		t.Fatal("trajectory_steps 应有 role 列")
+	}
+	var v string
+	if err := db.QueryRow(`SELECT value FROM _meta WHERE key='schema_version'`).Scan(&v); err != nil {
+		t.Fatalf("读版本: %v", err)
+	}
+	if v != "3" {
+		t.Fatalf("schema_version = %q, want 3", v)
+	}
+	// 幂等：再迁一次不报错
+	if err := Migrate(db); err != nil {
+		t.Fatalf("重复 Migrate: %v", err)
+	}
+}
+
+func TestMigrateV2toV3_Idempotent_ColumnExists(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(schemaSQL); err != nil {
+		t.Fatal(err)
+	}
+	// 手动置版本为 2，role 列已由 schemaSQL 建出 → migrateV2toV3 应跳过 ALTER、只 bump
+	db.Exec(`INSERT INTO _meta(key,value) VALUES('schema_version','2')`)
+	if err := migrateV2toV3(db); err != nil {
+		t.Fatalf("migrateV2toV3（列已存在）应幂等: %v", err)
 	}
 }

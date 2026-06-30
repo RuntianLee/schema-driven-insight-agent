@@ -7,11 +7,43 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RuntianLee/schema-driven-insight-agent/agent"
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
 	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
 
 	_ "modernc.org/sqlite"
 )
+
+// spyStore 记录 RecordLLMCallRole 是否被调及入参。
+type spyStore struct {
+	agent.TrajectoryStore
+	roleGot string
+	toutGot int
+	called  bool
+}
+
+func (s *spyStore) RecordLLMCallRole(role, _, _, _ string, _, tout int, _ float64, _, _ time.Time, _ error) {
+	s.called = true
+	s.roleGot = role
+	s.toutGot = tout
+}
+
+func TestTee_RecordLLMCallRole_FansToBoth(t *testing.T) {
+	cap := New()
+	spy := &spyStore{}
+	tee := NewTee(cap, spy)
+	now := time.Now()
+	tee.RecordLLMCallRole("judge:x", "p", "r", "m", 1, 9, 0.0, now, now, nil)
+	if !spy.called || spy.roleGot != "judge:x" || spy.toutGot != 9 {
+		t.Fatalf("rec 未收到 RecordLLMCallRole 或入参错: called=%v role=%q tout=%d", spy.called, spy.roleGot, spy.toutGot)
+	}
+}
+
+func TestCapture_RecordLLMCallRole_NoPanic(t *testing.T) {
+	cap := New()
+	now := time.Now()
+	cap.RecordLLMCallRole("judge:x", "p", "r", "m", 1, 2, 0.0, now, now, nil) // no-op 不 panic
+}
 
 // fakeRec 是最小 agent.TrajectoryStore，记录是否被双扇到。
 type fakeRec struct {
@@ -23,6 +55,9 @@ type fakeRec struct {
 
 func (f *fakeRec) TrajectoryID() string { return "rec-1" }
 func (f *fakeRec) RecordLLMCall(_, _, _ string, _, _ int, _ float64, _, _ time.Time, _ error) {
+	f.llm++
+}
+func (f *fakeRec) RecordLLMCallRole(_, _, _, _ string, _, _ int, _ float64, _, _ time.Time, _ error) {
 	f.llm++
 }
 func (f *fakeRec) RecordToolCall(_ string, _, _ any, _, _ time.Time, _ error) { f.tools++ }

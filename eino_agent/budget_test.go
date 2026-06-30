@@ -33,6 +33,8 @@ type capStore struct {
 func (c *capStore) TrajectoryID() string { return "cap" }
 func (c *capStore) RecordLLMCall(_, _, _ string, _, _ int, _ float64, _, _ time.Time, _ error) {
 }
+func (c *capStore) RecordLLMCallRole(_, _, _, _ string, _, _ int, _ float64, _, _ time.Time, _ error) {
+}
 func (c *capStore) RecordToolCall(_ string, _, _ any, _, _ time.Time, _ error) {}
 func (c *capStore) RecordReasoning(_ string, _, _ time.Time)                   {}
 func (c *capStore) Finalize(_ context.Context, outcome, _, errSummary string) error {

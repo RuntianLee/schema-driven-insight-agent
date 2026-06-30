@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS trajectory_steps (
     tool_name        TEXT,
     error            TEXT,
     metadata         TEXT,
+    role             TEXT,                          -- agent / judge:<name>（旧行 NULL=agent）
     FOREIGN KEY (trajectory_id) REFERENCES trajectories(trajectory_id)
 );
 CREATE INDEX IF NOT EXISTS idx_steps_traj  ON trajectory_steps(trajectory_id, step_index);

@@ -110,6 +110,10 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 			}
 		}
 
+		// judge 调用经 recordingClient 把 token 以 role 标签落 store（TrajDB 在则进 SQLite，否则 capture no-op）。
+		// agent 运行仍用原 ctx（agent 走 RecordLLMCall、不读 ctx recorder）。
+		evalCtx := evaluators.ContextWithRecorder(ctx, store)
+
 		scores := make(map[string]evaluators.Score, len(cfg.EvalOrder))
 		dcSeen := false
 		for _, name := range cfg.EvalOrder {
@@ -123,7 +127,7 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 				return nil, fmt.Errorf("任务 %q 选用 evaluator %q，但未在 EvalReg 注册（配置错误）", task.ID, name)
 			}
 			specCopy := spec
-			score, err := e.Evaluate(ctx, res, &specCopy)
+			score, err := e.Evaluate(evalCtx, res, &specCopy)
 			if err != nil {
 				score = evaluators.Score{Evaluator: name, Value: 0, Pass: false,
 					Display: "ERR", Detail: err.Error()}
