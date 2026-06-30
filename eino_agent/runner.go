@@ -135,22 +135,44 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 	return "", fmt.Errorf("exceeded max turns (%d) without final answer", maxTurns)
 }
 
-// parseToolCall 尝试把 LLM 输出解析为 tool 调用（首个 { 起的一段 JSON）。
-// 使用 json.Decoder 读取单个 JSON 值，忽略尾部的 markers/fences/prose 等多余内容。
+// detectors 是工具调用格式探测器链，按结构签名特异性从高到低排列；
+// 首个命中即返回。纯散文（无任何命中）→ 当最终答案。
+// 设计=vLLM tool-parser 注册表的 Go 移植（per-format parser + auto-detect + 归一）。
+var detectors = []func(string) (toolCall, bool){
+	parseMinimaxXMLToolCall,  // 家族C：<invoke> XML（args-blob 既有 + 逐参数）
+	parseTaggedJSONToolCall,  // 家族B：<tool_call>{json}</tool_call> / [TOOL_CALLS][{json}]
+	parseOpenAIJSONToolCall,  // 家族A：{name, arguments/parameters/input}
+	parseProjectJSONToolCall, // 家族A：{tool, args}（项目自有，既有路径原样保留）
+}
+
+// parseToolCall 依次尝试各格式探测器，把 LLM 文本输出解析为工具调用。
 func parseToolCall(s string) (toolCall, bool) {
 	trimmed := strings.TrimSpace(s)
-	if c, ok := parseMinimaxXMLToolCall(trimmed); ok {
-		return c, true
+	for _, d := range detectors {
+		if c, ok := d(trimmed); ok {
+			return c, true
+		}
 	}
-	start := strings.Index(trimmed, "{")
+	return toolCall{}, false
+}
+
+// parseProjectJSONToolCall 解析项目自有格式 {"tool":"X","args":{...}}（家族A）。
+// 完全保留重构前的 JSON 解析逻辑：首个 { 起 Decoder 解单值（容忍尾部散文），
+// 失败再补裸键引号重试。decodeToolCall 要求 tool 非空，故只认本格式、不与 OpenAI 抢。
+func parseProjectJSONToolCall(s string) (toolCall, bool) {
+	start := strings.Index(s, "{")
 	if start < 0 {
 		return toolCall{}, false
 	}
-	if c, ok := decodeToolCall(trimmed[start:]); ok {
+	if c, ok := decodeToolCall(s[start:]); ok {
 		return c, true
 	}
-	return decodeToolCall(quoteBareJSONKeys(trimmed[start:]))
+	return decodeToolCall(quoteBareJSONKeys(s[start:]))
 }
+
+// 占位：家族B、家族A-OpenAI 探测器在后续任务实现，此处先始终返回 false 以编译通过。
+func parseTaggedJSONToolCall(s string) (toolCall, bool) { return toolCall{}, false }
+func parseOpenAIJSONToolCall(s string) (toolCall, bool) { return toolCall{}, false }
 
 var minimaxXMLToolCallPattern = regexp.MustCompile(`(?s)<invoke\s+name=["']([^"']+)["'][^>]*>.*?<parameter\s+name=["']args["'][^>]*>(.*?)</parameter>`)
 
