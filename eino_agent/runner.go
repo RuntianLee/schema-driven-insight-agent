@@ -1,66 +1,56 @@
-// Package eino_agent 是 agent.Runner 的 V0 实现。V0 手写 LLM↔tool 循环；
-// V1 迁移到 Eino callback 接管（业务代码 0 侵入，trajectory-spec-v2 §7）。
+// Package eino_agent 是 agent.Runner 的 Eino 实现（Layer 2：手驱 ChatModel 循环 +
+// 结构化 tool_use）。四道护栏（dedup/q-index/预算闸/maxTurns）为明文 Go；探测器链
+// 降级为 provider 回退文本的 defense-in-depth fallback。trajectory 由 per-Run callback
+// handler 接管（withTrajectory + recordedDispatch），业务循环零手工 Record*。
 package eino_agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"html"
-	"regexp"
-	"strings"
 	"time"
+
+	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/agent"
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
 	"github.com/RuntianLee/schema-driven-insight-agent/prompts"
-	"github.com/RuntianLee/schema-driven-insight-agent/tools"
-	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
 )
 
-// 编译期断言：路线 A——trajectory.Recorder 必须满足 agent.TrajectoryStore（landing-map §0）。
-var _ agent.TrajectoryStore = (trajectory.Recorder)(nil)
-
-// 编译期断言：tools.Registry 必须满足 agent.ToolDispatcher。
-var _ agent.ToolDispatcher = (*tools.Registry)(nil)
-
 const (
-	AgentVersion = "v0.1.2"
-	maxTurns     = 8 // headroom for legitimate SCHEMA_ERROR self-correction (was 5)
-
-	// 成本护栏（maxTurns 之外的第二道闸：步数少但单轮巨大的场景）。
-	// 累计 token（in+out）或累计成本任一超限 → 终止本次 Run（outcome=error，可观测）。
+	AgentVersion    = "v0.2.0" // Eino Layer 2 接管
+	maxTurns        = 8
 	maxBudgetTokens = 200_000
 	maxBudgetUSD    = 1.0
 )
 
-type toolCall struct {
-	Tool string         `json:"tool"`
-	Args map[string]any `json:"args"`
-}
-
-// Runner 是 V0 的 agent.Runner 实现。
+// Runner 是 Eino Layer 2 的 agent.Runner 实现。
 type Runner struct {
-	llm           llm.Client
+	model         model.ToolCallingChatModel // 已绑 ToolInfos 的模型
+	modelName     string
 	tools         agent.ToolDispatcher
-	trajDB        trajDBOpener // 每个 Run 开一条新 trajectory
-	schemaContext string       // 由 Schema.Digest() 生成的结构摘要，注入到对话首轮
+	trajDB        trajDBOpener
+	schemaContext string
 }
 
-// trajDBOpener 抽象 trajectory.New，便于测试注入。
 type trajDBOpener func(ctx context.Context, agentVersion, question string) (agent.TrajectoryStore, error)
 
-// New 装配 Runner。schemaContext 由 Schema.Digest() 生成；传空串则省略（向后兼容）。
-func New(client llm.Client, dispatcher agent.ToolDispatcher, opener trajDBOpener, schemaContext string) *Runner {
-	return &Runner{llm: client, tools: dispatcher, trajDB: opener, schemaContext: schemaContext}
+// New 装配 Runner。传入的 model 在此绑定 ToolInfos（不可变 WithTools）；绑定失败即 panic（装配期错误）。
+func New(m model.ToolCallingChatModel, modelName string, dispatcher agent.ToolDispatcher,
+	opener trajDBOpener, schemaContext string) *Runner {
+	bound, err := m.WithTools(ToolInfos())
+	if err != nil {
+		panic(fmt.Sprintf("eino_agent.New: WithTools: %v", err))
+	}
+	return &Runner{model: bound, modelName: modelName, tools: dispatcher, trajDB: opener, schemaContext: schemaContext}
 }
 
-func (r *Runner) Health(_ context.Context) error { return nil }
-func (r *Runner) Stop(_ context.Context) error   { return nil }
+func (r *Runner) Health(context.Context) error { return nil }
+func (r *Runner) Stop(context.Context) error   { return nil }
 
-// Run 执行一次任务循环：system+question → LLM → (tool call → result)* → final answer。
+// Run 执行一次任务循环：system+question → ChatModel → (tool_use → tool_result)* → 最终答案。
 func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, runErr error) {
 	traj, err := r.trajDB(ctx, AgentVersion, question)
 	if err != nil {
@@ -72,37 +62,40 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 			panic(rec)
 		}
 	}()
+	ctx = withTrajectory(ctx, traj, r.modelName) // per-Run callback handler 接管 Record*
 
-	conversation := buildPrompt(prompts.SystemV0, r.schemaContext, time.Now(), question)
+	msgs := []*schema.Message{
+		schema.SystemMessage(buildSystemPrompt(prompts.SystemV0, r.schemaContext, time.Now())),
+		schema.UserMessage(question),
+	}
 
-	// 防空转硬护栏：记录已执行过的查询（规范化 key → 上次结果 JSON）。完全相同的查询
-	// 不重复打 DB，改为注入上次结果 + 明确反馈，逼模型作答或换参（system prompt 的软
-	// 约束之外的确定性兜底，避免低活跃数据上 LLM 误判 filter 失效而反复重发同一查询）。
-	seen := make(map[string]string)
-
-	// okSeq：成功(OK)结果的累计序号，注入给 agent 作归因块 q{N} 的「结果 id」——
-	// agent 抄此 id 而非心算第几个查询（口径同 contract.OKCalls / resolver，2026-06-27 (b')）。
+	seen := make(map[string]string) // canonicalKey → 上次结果 JSON
 	okSeq := 0
-
 	var spentTokens int
 	var spentUSD float64
+
 	for turn := 0; turn < maxTurns; turn++ {
-		t0 := time.Now()
-		resp, tokIn, tokOut, cost, llmErr := r.llm.Call(ctx, conversation)
-		traj.RecordLLMCall(conversation, resp, r.llm.Model(), tokIn, tokOut, cost, t0, time.Now(), llmErr)
-		if llmErr != nil {
-			_ = traj.Finalize(ctx, "error", "", llmErr.Error())
-			return "", llmErr
+		as, genErr := r.model.Generate(ctx, msgs) // callback → RecordLLMCall（真模型自动触发）
+		var tokIn, tokOut int
+		if as != nil && as.ResponseMeta != nil && as.ResponseMeta.Usage != nil {
+			tokIn = as.ResponseMeta.Usage.PromptTokens
+			tokOut = as.ResponseMeta.Usage.CompletionTokens
 		}
-		call, isToolCall := parseToolCall(resp)
-		if !isToolCall {
-			_ = traj.Finalize(ctx, "success", resp, "")
-			return resp, nil
+		if genErr != nil {
+			_ = traj.Finalize(ctx, "error", "", genErr.Error())
+			return "", genErr
+		}
+		msgs = append(msgs, as)
+
+		calls := structuredOrFallbackCalls(as)
+		if len(calls) == 0 {
+			_ = traj.Finalize(ctx, "success", as.Content, "")
+			return as.Content, nil
 		}
 
-		// 预算闸只拦"还要继续循环"的路径——当轮已给出最终回答则照常返回。
+		// 预算闸只拦"还要继续循环"的路径。
 		spentTokens += tokIn + tokOut
-		spentUSD += cost
+		spentUSD += llm.CostUSD(tokIn, tokOut)
 		if spentTokens > maxBudgetTokens || spentUSD > maxBudgetUSD {
 			msg := fmt.Sprintf("budget exceeded: tokens=%d (max %d) cost=$%.4f (max $%.2f)",
 				spentTokens, maxBudgetTokens, spentUSD, maxBudgetUSD)
@@ -110,25 +103,27 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 			return "", fmt.Errorf("%s", msg)
 		}
 
-		key := canonicalToolKey(call)
-		if prior, dup := seen[key]; dup {
-			// 完全相同的查询（table/column/filter/group_by/bucket_key 均未变）已执行过：
-			// 不再派发，注入上次结果 + 强反馈，让下一轮作答或换参。
-			conversation += fmt.Sprintf("\n\n## 重复查询已拦截\n你发起的查询与之前**完全相同**（参数未变），框架未重复执行。上次结果如下：\n%s\n\n请**直接基于该结果作答**；若需不同切面，请**改变参数**再查。不要重复同一查询。", prior)
-			continue
-		}
-
-		t1 := time.Now()
-		toolResp, toolErr := r.tools.Dispatch(ctx, call.Tool, call.Args)
-		traj.RecordToolCall(call.Tool, call.Args, toolResp, t1, time.Now(), toolErr)
-
-		resultJSON, _ := json.Marshal(toolResp)
-		seen[key] = string(resultJSON)
-		if toolResp.Status == contract.StatusOK {
-			okSeq++
-			conversation += fmt.Sprintf("\n\n## 工具 %s 返回（结果 id: q%d，归因块引用此 id）\n%s\n\n请据此给出最终回答或修正后重试。", call.Tool, okSeq, string(resultJSON))
-		} else {
-			conversation += fmt.Sprintf("\n\n## 工具 %s 返回（本次未成功，不计入结果编号）\n%s\n\n请修正后重试。", call.Tool, string(resultJSON))
+		// 逐 tool_use 派发（API 强制每个都配 tool_result）。
+		for _, c := range calls {
+			args := parseArgs(c.Function.Arguments)
+			key := canonicalToolKey(toolCall{Tool: c.Function.Name, Args: args})
+			if prior, dup := seen[key]; dup {
+				msgs = append(msgs, schema.ToolMessage(
+					fmt.Sprintf("## 重复查询已拦截\n你发起的查询与之前**完全相同**（参数未变），框架未重复执行。上次结果如下：\n%s\n\n请**直接基于该结果作答**；若需不同切面，请**改变参数**再查。", prior),
+					c.ID))
+				continue
+			}
+			toolResp, _ := recordedDispatch(ctx, r.tools, c.Function.Name, args) // callback → RecordToolCall
+			resultJSON, _ := json.Marshal(toolResp)
+			seen[key] = string(resultJSON)
+			var content string
+			if toolResp.Status == contract.StatusOK {
+				okSeq++
+				content = fmt.Sprintf("## 工具 %s 返回（结果 id: q%d，归因块引用此 id）\n%s\n\n请据此给出最终回答或修正后重试。", c.Function.Name, okSeq, string(resultJSON))
+			} else {
+				content = fmt.Sprintf("## 工具 %s 返回（本次未成功，不计入结果编号）\n%s\n\n请修正后重试。", c.Function.Name, string(resultJSON))
+			}
+			msgs = append(msgs, schema.ToolMessage(content, c.ID))
 		}
 	}
 
@@ -136,260 +131,43 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 	return "", fmt.Errorf("exceeded max turns (%d) without final answer", maxTurns)
 }
 
-// detectors 是工具调用格式探测器链，按结构签名特异性从高到低排列；
-// 首个命中即返回。纯散文（无任何命中）→ 当最终答案。
-// 设计=vLLM tool-parser 注册表的 Go 移植（per-format parser + auto-detect + 归一）。
-var detectors = []func(string) (toolCall, bool){
-	parseMinimaxXMLToolCall,  // 家族C：<invoke> XML（args-blob 既有 + 逐参数）
-	parseTaggedJSONToolCall,  // 家族B：<tool_call>{json}</tool_call> / [TOOL_CALLS][{json}]
-	parseOpenAIJSONToolCall,  // 家族A：{name, arguments/parameters/input}
-	parseProjectJSONToolCall, // 家族A：{tool, args}（项目自有，既有路径原样保留）
+// structuredOrFallbackCalls 取本轮工具调用：优先结构化 ToolCalls；为空时对 Content 跑探测器链
+// （defense-in-depth：provider/网关回退纯文本工具调用时仍能识别）。
+func structuredOrFallbackCalls(as *schema.Message) []schema.ToolCall {
+	if len(as.ToolCalls) > 0 {
+		return as.ToolCalls
+	}
+	if c, ok := parseToolCall(as.Content); ok {
+		argsJSON, _ := json.Marshal(c.Args)
+		return []schema.ToolCall{{ID: "fallback_" + c.Tool, Type: "function",
+			Function: schema.FunctionCall{Name: c.Tool, Arguments: string(argsJSON)}}}
+	}
+	return nil
 }
 
-// parseToolCall 依次尝试各格式探测器，把 LLM 文本输出解析为工具调用。
-func parseToolCall(s string) (toolCall, bool) {
-	trimmed := strings.TrimSpace(s)
-	for _, d := range detectors {
-		if c, ok := d(trimmed); ok {
-			return c, true
-		}
-	}
-	return toolCall{}, false
-}
-
-// parseProjectJSONToolCall 解析项目自有格式 {"tool":"X","args":{...}}（家族A）。
-// 完全保留重构前的 JSON 解析逻辑：首个 { 起 Decoder 解单值（容忍尾部散文），
-// 失败再补裸键引号重试。decodeToolCall 要求 tool 非空，故只认本格式、不与 OpenAI 抢。
-func parseProjectJSONToolCall(s string) (toolCall, bool) {
-	start := strings.Index(s, "{")
-	if start < 0 {
-		return toolCall{}, false
-	}
-	if c, ok := decodeToolCall(s[start:]); ok {
-		return c, true
-	}
-	return decodeToolCall(quoteBareJSONKeys(s[start:]))
-}
-
-// toolCallTagRe 抓 <tool_call>…</tool_call> 内层（Hermes/Qwen）。
-var toolCallTagRe = regexp.MustCompile(`(?s)<tool_call>\s*(.*?)\s*</tool_call>`)
-
-// mistralTagRe 抓 [TOOL_CALLS] 之后到串尾的内容（Mistral/Llama 风格）。
-// (.*) 贪婪吸到串尾的尾部散文由 decodeTaggedInner 的 json.Decoder 容忍（停在合法 JSON 尾）。
-var mistralTagRe = regexp.MustCompile(`(?s)\[TOOL_CALLS\]\s*(.*)`)
-
-// parseTaggedJSONToolCall 解析家族B：标记包裹的 JSON 工具调用。
-// 内层走 toolCallFromObject（deferToProject=false：标记已是强信号、不让位）。
-func parseTaggedJSONToolCall(s string) (toolCall, bool) {
-	if m := toolCallTagRe.FindStringSubmatch(s); len(m) == 2 {
-		if c, ok := decodeTaggedInner(m[1]); ok {
-			return c, true
-		}
-	}
-	if m := mistralTagRe.FindStringSubmatch(s); len(m) == 2 {
-		if c, ok := decodeTaggedInner(m[1]); ok {
-			return c, true
-		}
-	}
-	return toolCall{}, false
-}
-
-// decodeTaggedInner 解析标记内层：数组 [{...}] 取第一个对象，或单个 {...}。
-func decodeTaggedInner(inner string) (toolCall, bool) {
-	inner = strings.TrimSpace(inner)
-	if strings.HasPrefix(inner, "[") {
-		var arr []json.RawMessage
-		if json.NewDecoder(strings.NewReader(inner)).Decode(&arr) == nil && len(arr) > 0 {
-			return toolCallFromObject(arr[0], false)
-		}
-		return toolCall{}, false
-	}
-	start := strings.Index(inner, "{")
-	if start < 0 {
-		return toolCall{}, false
-	}
-	return toolCallFromObject([]byte(inner[start:]), false)
-}
-
-// parseOpenAIJSONToolCall 解析 OpenAI 式 {name, arguments/parameters/input}（家族A）。
-// 首个 { 起；含 tool 键则让位给项目探测器。补裸键引号重试以容错。
-func parseOpenAIJSONToolCall(s string) (toolCall, bool) {
-	start := strings.Index(s, "{")
-	if start < 0 {
-		return toolCall{}, false
-	}
-	if c, ok := toolCallFromObject([]byte(s[start:]), true); ok {
-		return c, true
-	}
-	return toolCallFromObject([]byte(quoteBareJSONKeys(s[start:])), true)
-}
-
-// toolCallFromObject 从一段工具调用 JSON 对象解析 {name, arguments/parameters/input}，
-// 供家族A（OpenAI 纯 JSON）与家族B（标记包裹）共用。用 Decoder 容忍尾部散文。
-// deferToProject=true 时，对象含 "tool" 键则返回 false（让位给项目自有 {tool,args}）。
-// arguments 兼容对象形态与 JSON 字符串形态（OpenAI 把 arguments 序列化成字符串）。
-func toolCallFromObject(obj []byte, deferToProject bool) (toolCall, bool) {
-	var raw map[string]json.RawMessage
-	if json.NewDecoder(bytes.NewReader(obj)).Decode(&raw) != nil {
-		return toolCall{}, false
-	}
-	if deferToProject {
-		if _, has := raw["tool"]; has {
-			return toolCall{}, false
-		}
-	}
-	nameRaw, ok := raw["name"]
-	if !ok {
-		return toolCall{}, false
-	}
-	var name string
-	if json.Unmarshal(nameRaw, &name) != nil || name == "" {
-		return toolCall{}, false
-	}
+// parseArgs 把 tool_use 的 Arguments(JSON 串) 解析为 map[string]any 供 Dispatch/dedup。
+func parseArgs(argsJSON string) map[string]any {
 	args := map[string]any{}
-	for _, k := range []string{"arguments", "parameters", "input"} {
-		argRaw, ok := raw[k]
-		if !ok {
-			continue
-		}
-		var asObj map[string]any
-		if json.Unmarshal(argRaw, &asObj) == nil {
-			args = asObj // 对象形态
-		} else {
-			var asStr string
-			if json.Unmarshal(argRaw, &asStr) == nil {
-				_ = json.Unmarshal([]byte(asStr), &args) // JSON 字符串形态
-			}
-		}
-		break
-	}
-	if args == nil {
-		args = map[string]any{}
-	}
-	return toolCall{Tool: name, Args: args}, true
+	_ = json.Unmarshal([]byte(argsJSON), &args)
+	return args
 }
 
-var minimaxXMLToolCallPattern = regexp.MustCompile(`(?s)<invoke\s+name=["']([^"']+)["'][^>]*>.*?<parameter\s+name=["']args["'][^>]*>(.*?)</parameter>`)
-
-// invokeBlockRe 抓第一个 <invoke name="X">…</invoke> 块（含其内部 body）。
-var invokeBlockRe = regexp.MustCompile(`(?s)<invoke\s+name=["']([^"']+)["'][^>]*>(.*?)</invoke>`)
-
-// paramRe 抓 <parameter name="K">V</parameter>（逐参数形态）。
-var paramRe = regexp.MustCompile(`(?s)<parameter\s+name=["']([^"']+)["'][^>]*>(.*?)</parameter>`)
-
-// parseMinimaxXMLToolCall 解析 MiniMax 原生 XML 工具调用（家族C）。
-// 先试既有 args-blob 形态（单个 name="args" 内含整块 JSON），不命中则逐参数兜底：
-// 取第一个 <invoke>，把其所有 <parameter name="K">V</parameter> 聚成 args，
-// 每个 V 按 JSON 解码（数组/对象/数字/bool），失败当字符串标量。
-func parseMinimaxXMLToolCall(s string) (toolCall, bool) {
-	// 1) args-blob 既有路径优先（零回归）。
-	if m := minimaxXMLToolCallPattern.FindStringSubmatch(s); len(m) == 3 {
-		argsText := strings.TrimSpace(html.UnescapeString(m[2]))
-		if args, ok := decodeToolArgs(argsText); ok {
-			return toolCall{Tool: m[1], Args: args}, true
-		}
-		if args, ok := decodeToolArgs(quoteBareJSONKeys(argsText)); ok {
-			return toolCall{Tool: m[1], Args: args}, true
-		}
-		// args-blob 命中签名但 JSON 坏 → 继续逐参数兜底，不在此 return false。
-		// 降级后逐参数会把 name="args" 当普通 key（args["args"]=raw），属可接受的行为降级。
-	}
-
-	// 2) 逐参数兜底：第一个 <invoke> + 其 <parameter>。
-	ib := invokeBlockRe.FindStringSubmatch(s)
-	if len(ib) != 3 {
-		return toolCall{}, false
-	}
-	params := paramRe.FindAllStringSubmatch(ib[2], -1)
-	if len(params) == 0 {
-		return toolCall{}, false
-	}
-	args := make(map[string]any, len(params))
-	for _, p := range params {
-		args[p[1]] = decodeParamValue(strings.TrimSpace(html.UnescapeString(p[2])))
-	}
-	return toolCall{Tool: ib[1], Args: args}, true
-}
-
-// decodeParamValue 尝试把逐参数值按 JSON 严格解码（[]/{}/数字/bool/null，必须消耗全部输入），
-// 失败则当字符串标量——避免 "42abc" 被误解成 42 而丢尾部（静默错值）。
-func decodeParamValue(v string) any {
-	var out any
-	if json.Unmarshal([]byte(v), &out) == nil {
-		return out
-	}
-	return v
-}
-
-func decodeToolArgs(s string) (map[string]any, bool) {
-	var args map[string]any
-	dec := json.NewDecoder(strings.NewReader(s))
-	if err := dec.Decode(&args); err != nil {
-		return nil, false
-	}
-	return args, true
-}
-
-func decodeToolCall(s string) (toolCall, bool) {
-	var c toolCall
-	dec := json.NewDecoder(strings.NewReader(s))
-	if err := dec.Decode(&c); err != nil {
-		return toolCall{}, false
-	}
-	if c.Tool == "" {
-		return toolCall{}, false
-	}
-	return c, true
-}
-
-var bareJSONKeyPattern = regexp.MustCompile(`([{\s,])([A-Za-z_][A-Za-z0-9_]*)\s*:`)
-
-func quoteBareJSONKeys(s string) string {
-	return bareJSONKeyPattern.ReplaceAllString(s, `$1"$2":`)
-}
-
-// canonicalToolKey 把 tool 调用规范化为去重 key：tool 名 + args 的 JSON。
-// encoding/json 对 map 键按字母序稳定输出，故同一 (tool, args) 不论 LLM 输出时
-// 键序如何，得到的 key 一致（嵌套 args 如 filter 同理）；用于检测"完全相同的查询"。
-func canonicalToolKey(c toolCall) string {
-	b, err := json.Marshal(c)
-	if err != nil {
-		return c.Tool // 退化：marshal 失败（极少见）时仅按 tool 名
-	}
+// serializeMessages 把对话消息列表序列化为 trajectory 存储串（结构化 content 序列化格式）。
+func serializeMessages(msgs []*schema.Message) string {
+	b, _ := json.Marshal(msgs)
 	return string(b)
 }
 
-// cutoffWindowsDays 是 prompt 里预算 cutoff 表覆盖的相对时间窗口。
-// 模型自算 cutoff 偶有偏差（实测算成 9 天而非 3 天）；预算表让 Agent 抄、不要心算。
-var cutoffWindowsDays = []int{1, 3, 7, 14, 30}
-
-// buildPrompt 拼接喂给 LLM 的完整 prompt：
-//
-//	system_v0  +  schema 摘要  +  当前时间 + 预算 cutoff 表  +  运营问题
-//
-// 注入"今天"避免模型靠训练截止日期猜；预算 cutoff 表覆盖常用窗口（1/3/7/14/30 日），
-// Agent 直接抄即可，不需要做减法。其他天数仍可按公式自算（精确公式给出）。
-func buildPrompt(systemPrompt, schemaContext string, now time.Time, question string) string {
-	var b strings.Builder
-	b.WriteString(systemPrompt)
-	if schemaContext != "" {
-		b.WriteString("\n\n")
-		b.WriteString(schemaContext)
+// serializeAssistant 把 assistant 消息（含 tool_calls）序列化为 trajectory response 串。
+func serializeAssistant(m *schema.Message) string {
+	if m == nil {
+		return ""
 	}
-	nowUnix := now.Unix()
-	fmt.Fprintf(&b, "\n\n## 当前时间\n今天是 %s（unix=%d）。\n", now.Format("2006-01-02"), nowUnix)
-	b.WriteString("\n### 相对时间 cutoff 速查（“N 日未登录”/“N 日未活跃”等问题直接抄；不要心算）\n")
-	for _, d := range cutoffWindowsDays {
-		fmt.Fprintf(&b, "- %d 日：cutoff = %d\n", d, nowUnix-int64(d)*86400)
+	if len(m.ToolCalls) > 0 {
+		b, _ := json.Marshal(m.ToolCalls)
+		return string(b)
 	}
-	fmt.Fprintf(&b, "- 其他天数：cutoff = %d - N*86400（精确公式；上表覆盖外才用）\n", nowUnix)
-	b.WriteString("\n## 运营问题\n")
-	b.WriteString(question)
-	return b.String()
+	return m.Content
 }
 
-// 确保 Runner 满足 agent.Runner。
 var _ agent.Runner = (*Runner)(nil)
-
-// _ 引用 contract 包，避免误删 import（Response 经 Dispatch 流转）。
-var _ = contract.StatusOK

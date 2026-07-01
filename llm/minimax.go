@@ -143,7 +143,7 @@ func (c *minimaxClient) callOpenAI(ctx context.Context, prompt string) (string, 
 		return "", 0, 0, 0, fmt.Errorf("minimax: empty choices; body=%s", string(raw))
 	}
 	tokIn, tokOut := r.Usage.PromptTokens, r.Usage.CompletionTokens
-	cost := float64(tokIn)/1000*costPerKTokenIn + float64(tokOut)/1000*costPerKTokenOut
+	cost := CostUSD(tokIn, tokOut)
 	msg := r.Choices[0].Message
 	content := msg.Content
 	if content == "" && msg.ReasoningContent != "" {

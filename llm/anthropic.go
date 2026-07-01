@@ -98,7 +98,7 @@ func (c *minimaxClient) callAnthropic(ctx context.Context, prompt string) (strin
 	}
 
 	tokIn, tokOut := r.Usage.InputTokens, r.Usage.OutputTokens
-	cost := float64(tokIn)/1000*costPerKTokenIn + float64(tokOut)/1000*costPerKTokenOut
+	cost := CostUSD(tokIn, tokOut)
 
 	var sb strings.Builder
 	for _, block := range r.Content {

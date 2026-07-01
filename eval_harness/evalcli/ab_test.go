@@ -7,16 +7,49 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
+
 	evalpkg "github.com/RuntianLee/schema-driven-insight-agent/eval_harness"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/reflexion"
 	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
 )
 
-// fakeLLM 无状态、由 prompt 驱动：
-//   - prompt 已含工具返回（"row_count" / "\"status\""）→ 返回最终答案，结束本轮 agent 循环；
-//   - 否则发一次 analyze tool-call：prompt 含 "REFLECT"（reflection 开）→ group_by server_id（命中 golden）；
-//     无 reflection → group_by wrong_field（analyze 返回 SCHEMA_ERROR → data_correctness fail）。
+// fakeAgentModel 是 AB 测试的确定性 eino agent 模型，感知对话消息中的 "REFLECT" 标记：
+//   - 消息已含工具返回（"row_count" / "\"status\""）→ 返回最终答案，结束循环；
+//   - 否则发一次 analyze tool-call：消息含 "REFLECT" → group_by server_id（命中 golden）；
+//     无 reflection → group_by wrong_field（SCHEMA_ERROR → data_correctness fail）。
+type fakeAgentModel struct{}
+
+func (fakeAgentModel) Generate(_ context.Context, msgs []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+	// 拼接全部消息内容判断当前对话状态。
+	var combined strings.Builder
+	for _, m := range msgs {
+		combined.WriteString(m.Content)
+		for _, tc := range m.ToolCalls {
+			combined.WriteString(tc.Function.Arguments)
+		}
+	}
+	text := combined.String()
+	if strings.Contains(text, "row_count") || strings.Contains(text, "\"status\"") {
+		return &schema.Message{Role: schema.Assistant, Content: "最终洞察：各服玩家数已给出。"}, nil
+	}
+	field := "wrong_field"
+	if strings.Contains(text, "REFLECT") {
+		field = "server_id"
+	}
+	return &schema.Message{
+		Role:    schema.Assistant,
+		Content: `{"tool":"analyze","args":{"table":"player_basics","group_by":["` + field + `"],"aggregates":[{"fn":"count","as":"n"}]}}`,
+	}, nil
+}
+func (fakeAgentModel) Stream(context.Context, []*schema.Message, ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	panic("unused")
+}
+func (m fakeAgentModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) { return m, nil }
+
+// fakeLLM 仅供 judge/reflect 使用（advisor/judge 仍走 llm.Client 接口）。
 type fakeLLM struct{}
 
 func (fakeLLM) Model() string { return "fake" }
@@ -24,11 +57,7 @@ func (fakeLLM) Call(_ context.Context, prompt string) (string, int, int, float64
 	if strings.Contains(prompt, "row_count") || strings.Contains(prompt, "\"status\"") {
 		return "最终洞察：各服玩家数已给出。", 10, 10, 0, nil
 	}
-	field := "wrong_field"
-	if strings.Contains(prompt, "REFLECT") {
-		field = "server_id"
-	}
-	return `{"tool":"analyze","args":{"table":"player_basics","group_by":["` + field + `"],"aggregates":[{"fn":"count","as":"n"}]}}`, 10, 10, 0, nil
+	return "mock judge response", 10, 10, 0, nil
 }
 
 // fakeProvider 注入含 "REFLECT" 标记的上下文，使 config B 的 agent 选对分组字段。
@@ -44,7 +73,7 @@ func TestRunAB_ProviderRaisesPassRate(t *testing.T) {
 		SchemaPath: "testdata/ab/schema.yaml",
 		TasksDir:   "testdata/ab/tasks",
 	}
-	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), fakeProvider{}, 3, 1, "reflection")
+	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), fakeAgentModel{}, fakeProvider{}, 3, 1, "reflection")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +115,7 @@ func TestRunAB_DesignBeta_CrossTrialAccumulation(t *testing.T) {
 		TasksDir:   "testdata/ab/tasks",
 	}
 	// runs=1（1 个独立样本），attempts=2（每样本 2 次 reflexion 尝试，取第 2 次）。
-	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), &learningProvider{}, 1, 2, "reflection")
+	ab, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), fakeAgentModel{}, &learningProvider{}, 1, 2, "reflection")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +139,7 @@ func TestRunAB_PersistsTrajectoryWithABTaskClass(t *testing.T) {
 		TrajDBPath: dbPath,
 	}
 
-	_, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), &learningProvider{}, 1, 2, "reflection")
+	_, err := runABWithClients(opts, fakeLLM{}, evaluators.NewMockJudge(), fakeAgentModel{}, &learningProvider{}, 1, 2, "reflection")
 	if err != nil {
 		t.Fatal(err)
 	}

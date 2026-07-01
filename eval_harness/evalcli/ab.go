@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudwego/eino/components/model"
+
 	"github.com/RuntianLee/schema-driven-insight-agent/eino_agent"
 	evalpkg "github.com/RuntianLee/schema-driven-insight-agent/eval_harness"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/reflexion"
@@ -39,7 +41,8 @@ func RunAB(opts Options, runs, attempts int) (*evalpkg.ABReport, error) {
 	}
 	defer cleanup()
 	snapshotBefore := memorySnapshotID(opts.MemoryDBPath)
-	ab, err := runABWithClients(opts, real, real, provider, runs, attempts, labelB)
+	// 真道：agentLLM=nil, agentModel=nil → runPass 走 opts.UseRealLLM 分支建 ChatModel；judge 仍用 real。
+	ab, err := runABWithClients(opts, nil, real, nil, provider, runs, attempts, labelB)
 	if err != nil {
 		return nil, err
 	}
@@ -115,9 +118,10 @@ func allowedFieldsForMemory(schemaPath string) ([]string, error) {
 	return fields, nil
 }
 
-// runABWithClients 是 RunAB 的可测内核：client/provider 由调用方注入（测试传 fake）。
+// runABWithClients 是 RunAB 的可测内核：client/provider/agentModel 由调用方注入（测试传 fake）。
+// agentModel 非 nil 则 agent 腿用注入模型（测试 fake eino model）；nil 则由 runPass 按 opts.UseRealLLM 决定。
 // config A（baseline）：provider=nil 冷跑 1 次；config B：每样本 Reset 后跑 attempts 次 reflexion，取末次。
-func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners.ReflectionProvider, runs, attempts int, labelB string) (*evalpkg.ABReport, error) {
+func runABWithClients(opts Options, agentLLM, judge llm.Client, agentModel model.ToolCallingChatModel, provider runners.ReflectionProvider, runs, attempts int, labelB string) (*evalpkg.ABReport, error) {
 	if runs <= 0 {
 		return nil, fmt.Errorf("runs 必须 > 0")
 	}
@@ -145,7 +149,7 @@ func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners
 
 	var aReports, bReports []*evalpkg.Report
 	for i := 0; i < runs; i++ {
-		ra, err := runPass(schema, taskList, withTaskClass(opts, "benchmark:ab:baseline"), agentLLM, judge, nil, trajDB) // A: baseline 冷跑 1 次
+		ra, err := runPass(schema, taskList, withTaskClass(opts, "benchmark:ab:baseline"), agentLLM, judge, agentModel, nil, trajDB) // A: baseline 冷跑 1 次
 		if err != nil {
 			return nil, fmt.Errorf("A run %d: %w", i, err)
 		}
@@ -156,7 +160,7 @@ func runABWithClients(opts Options, agentLLM, judge llm.Client, provider runners
 		var rb *evalpkg.Report
 		for k := 0; k < attempts; k++ {
 			taskClass := fmt.Sprintf("benchmark:ab:%s:attempt%d", labelB, k+1)
-			rb, err = runPass(schema, taskList, withTaskClass(opts, taskClass), agentLLM, judge, provider, trajDB) // B: 第 k 次 reflexion 尝试
+			rb, err = runPass(schema, taskList, withTaskClass(opts, taskClass), agentLLM, judge, agentModel, provider, trajDB) // B: 第 k 次 reflexion 尝试
 			if err != nil {
 				return nil, fmt.Errorf("B run %d attempt %d: %w", i, k, err)
 			}

@@ -2,230 +2,70 @@ package eino_agent
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/cloudwego/eino/schema"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/agent"
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
 	"github.com/RuntianLee/schema-driven-insight-agent/prompts"
-	"github.com/RuntianLee/schema-driven-insight-agent/schema_protocol"
-	"github.com/RuntianLee/schema-driven-insight-agent/tools"
-	"github.com/RuntianLee/schema-driven-insight-agent/trajectory"
-
-	_ "modernc.org/sqlite"
 )
 
-const testSchemaYAML = `
-version: 1
-domain: test_game
-tuning:
-  groups_top_n: 5
-state_tables:
-  player_basics:
-    nature: snapshot
-    primary_key: [player_id]
-    fields:
-      player_id:         {type: int64, role: actor_id, pk: true, pii: true}
-      server_id:         {type: int32, role: dimension}
-      level:             {type: int32, role: level}
-      quest_level:   {type: int32, role: stage_progress}
-      coins:             {type: int64, role: balance, currency_type: coins}
-      last_online_time:  {type: unix_timestamp_seconds, role: last_seen}
-derived_tables:
-  player_currencies:
-    derived_from: player_basics
-    method: pivot_money_columns
-    schema:
-      player_id:     {type: int64,  role: actor_id}
-      currency_type: {type: string, role: currency_kind, glossary_key: currency_types}
-      balance:       {type: int64,  role: balance}
-glossary:
-  currency_types:
-    coins: "coins (test)"
-  buckets:
-    coins_balance:
-      - {min: 0,      max: 10000,  label: "0~1w"}
-      - {min: 10001,  max: 100000, label: "1~10w"}
-      - {min: 100001, max: 200000, label: "10~20w"}
-      - {min: 200001, max: 500000, label: "20w~50w"}
-      - {min: 500001, max: null,   label: "50w+"}
-`
+// stubDispatcher 按 tool 名返回预设 Response，并记录收到的 args。
+type stubDispatcher struct {
+	resp     map[string]contract.Response
+	lastArgs map[string]any
+}
 
-func loadSchema(t *testing.T) *schema_protocol.Schema {
-	t.Helper()
-	s, err := schema_protocol.Parse([]byte(testSchemaYAML))
+func (d *stubDispatcher) Dispatch(_ context.Context, name string, args map[string]any) (contract.Response, error) {
+	d.lastArgs = args
+	if r, ok := d.resp[name]; ok {
+		return r, nil
+	}
+	return contract.Response{Status: contract.StatusSchemaError, Hint: "unknown"}, nil
+}
+
+func newTestRunner(m *fakeModel, disp agent.ToolDispatcher, rec *fakeRecorder) *Runner {
+	opener := func(context.Context, string, string) (agent.TrajectoryStore, error) { return rec, nil }
+	return New(m, "MiniMax-M2.7", disp, opener, "")
+}
+
+func TestRun_SingleToolThenAnswer(t *testing.T) {
+	m := &fakeModel{responses: []*schema.Message{
+		asMsg(10, 5, tc("call_1", "query_distribution", `{"table":"player_currencies","column":"balance"}`)),
+		finalMsg("最终洞察：分布如下。"),
+	}}
+	disp := &stubDispatcher{resp: map[string]contract.Response{"query_distribution": {Status: contract.StatusOK}}}
+	rec := &fakeRecorder{}
+	ans, err := newTestRunner(m, disp, rec).Run(context.Background(), "余额怎么分布？")
 	if err != nil {
-		t.Fatalf("parse inline schema: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
-	return s
-}
-
-// seqMock is a sequential LLM mock that returns scripted responses in order.
-// This avoids the substring-ambiguity problem that arises when a cumulative
-// conversation prompt contains keys from multiple turns.
-type seqMock struct {
-	responses []string
-	idx       int
-}
-
-func (s *seqMock) Call(_ context.Context, _ string) (string, int, int, float64, error) {
-	if s.idx >= len(s.responses) {
-		return "（seqMock exhausted）", 1, 1, 0, nil
+	if ans != "最终洞察：分布如下。" {
+		t.Fatalf("answer=%q", ans)
 	}
-	r := s.responses[s.idx]
-	s.idx++
-	return r, len(r) / 4, len(r) / 4, 0, nil
-}
-func (s *seqMock) Model() string { return "mock-seq" }
-
-// Verify seqMock satisfies llm.Client at compile time.
-var _ llm.Client = (*seqMock)(nil)
-
-func fixtureDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, _ := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
-	t.Cleanup(func() { db.Close() })
-	db.Exec(`CREATE TABLE player_currencies (player_id TEXT, currency_type TEXT, balance INTEGER)`)
-	tx, _ := db.Begin()
-	stmt, _ := tx.Prepare(`INSERT INTO player_currencies VALUES ('p', 'coins', ?)`)
-	insert := func(balance int64, n int) {
-		for i := 0; i < n; i++ {
-			stmt.Exec(balance)
-		}
+	if rec.outcome != "success" {
+		t.Fatalf("outcome=%q want success", rec.outcome)
 	}
-	insert(5000, 200)
-	insert(50000, 150)
-	insert(600000, 50)
-	stmt.Close()
-	tx.Commit()
-	return db
-}
-
-func TestRunner_MockLLM_ToolRouteAndTrajectory(t *testing.T) {
-	ctx := context.Background()
-	schema := loadSchema(t)
-	bizDB := fixtureDB(t)
-
-	// trajectory DB
-	trajDB, err := trajectory.Open(filepath.Join(t.TempDir(), "traj.db"))
-	if err != nil {
-		t.Fatalf("traj open: %v", err)
-	}
-	t.Cleanup(func() { trajDB.Close() })
-	if err := trajectory.Migrate(trajDB); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-
-	// tools
-	reg := tools.NewRegistry()
-	distTool := tools.NewDistributionTool(schema, bizDB)
-	reg.Register("query_distribution", func(c context.Context, args map[string]any) (contract.Response, error) {
-		in := tools.QueryDistributionInput{
-			Table:     str(args["table"]),
-			Column:    str(args["column"]),
-			BucketKey: str(args["bucket_key"]),
-			Filter:    map[string]any{"currency_type": "coins"},
-		}
-		return distTool.Run(c, in), nil
-	})
-
-	// Sequential mock LLM: turn1 → tool call JSON; turn2 → final natural-language report.
-	// Uses call-order (not substring matching) to avoid ambiguity across cumulative prompts.
-	mock := &seqMock{
-		responses: []string{
-			// turn 1: instruct the runner to call query_distribution
-			`{"tool":"query_distribution","args":{"table":"player_currencies","column":"balance","bucket_key":"coins_balance"}}`,
-			// turn 2: final answer referencing ROI — satisfies the test assertion
-			"报告：头部玩家集中度显著，1~10w 段是 ROI 最高的运营目标群。",
-		},
-	}
-
-	opener := func(c context.Context, ver, q string) (agent.TrajectoryStore, error) {
-		return trajectory.New(c, trajDB, ver, q, "benchmark")
-	}
-	runner := New(mock, reg, opener, schema.Digest())
-
-	answer, err := runner.Run(ctx, "当前货币分布是怎样的？")
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if answer == "" || !strings.Contains(answer, "ROI") {
-		t.Fatalf("unexpected final answer: %q", answer)
-	}
-
-	// trajectory assertions: outcome=success, ≥1 tool_call, ≥2 llm_call steps.
-	var outcome string
-	var stepCount int
-	trajDB.QueryRow(`SELECT outcome, step_count FROM trajectories ORDER BY created_at DESC LIMIT 1`).
-		Scan(&outcome, &stepCount)
-	if outcome != "success" {
-		t.Fatalf("outcome = %q, want success", outcome)
-	}
-	var toolSteps int
-	trajDB.QueryRow(`SELECT COUNT(*) FROM trajectory_steps WHERE step_type='tool_call'`).Scan(&toolSteps)
-	if toolSteps < 1 {
-		t.Fatal("expected at least one tool_call step")
-	}
-	var llmSteps int
-	trajDB.QueryRow(`SELECT COUNT(*) FROM trajectory_steps WHERE step_type='llm_call'`).Scan(&llmSteps)
-	if llmSteps < 2 {
-		t.Fatalf("expected >=2 llm_call steps (tool turn + final), got %d", llmSteps)
+	if len(rec.toolCalls) != 1 || rec.toolCalls[0] != "query_distribution" {
+		t.Fatalf("toolCalls=%v", rec.toolCalls)
 	}
 }
 
-// TestRunner_DedupsRepeatedToolCalls 验证防空转硬护栏：LLM 连发两次**完全相同**的
-// tool 调用，框架只真正派发一次（第二次短路，注入上次结果），最终基于结果作答成功。
-func TestRunner_DedupsRepeatedToolCalls(t *testing.T) {
-	ctx := context.Background()
-	schema := loadSchema(t)
-
-	trajDB, err := trajectory.Open(filepath.Join(t.TempDir(), "traj.db"))
+func TestRun_ArgsReachDispatcher(t *testing.T) {
+	m := &fakeModel{responses: []*schema.Message{
+		asMsg(1, 1, tc("c", "analyze", `{"table":"t1","limit":5}`)),
+		finalMsg("done"),
+	}}
+	disp := &stubDispatcher{resp: map[string]contract.Response{"analyze": {Status: contract.StatusOK}}}
+	_, err := newTestRunner(m, disp, &fakeRecorder{}).Run(context.Background(), "q")
 	if err != nil {
-		t.Fatalf("traj open: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
-	t.Cleanup(func() { trajDB.Close() })
-	if err := trajectory.Migrate(trajDB); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-
-	var dispatchCount int
-	reg := tools.NewRegistry()
-	reg.Register("query_distribution", func(c context.Context, args map[string]any) (contract.Response, error) {
-		dispatchCount++
-		return contract.Response{Status: contract.StatusOK}, nil
-	})
-
-	// 同一查询发两次（键序不同，语义相同——验证规范化 key 也能识别），再给最终答案。
-	call1 := `{"tool":"query_distribution","args":{"table":"player_basics","column":"level","filter":{"last_online_time":{"op":"<","value":1779499429}}}}`
-	call2 := `{"tool":"query_distribution","args":{"column":"level","filter":{"last_online_time":{"value":1779499429,"op":"<"}},"table":"player_basics"}}`
-	mock := &seqMock{responses: []string{call1, call2, "最终报告：流失玩家集中在低等级。"}}
-
-	opener := func(c context.Context, ver, q string) (agent.TrajectoryStore, error) {
-		return trajectory.New(c, trajDB, ver, q, "benchmark")
-	}
-	runner := New(mock, reg, opener, schema.Digest())
-
-	answer, err := runner.Run(ctx, "流失玩家卡在哪些等级？")
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if !strings.Contains(answer, "流失") {
-		t.Fatalf("unexpected final answer: %q", answer)
-	}
-	if dispatchCount != 1 {
-		t.Fatalf("完全相同的查询应只派发一次，实际派发 %d 次", dispatchCount)
-	}
-
-	// trajectory 应只记录 1 个 tool_call 步（第二次被护栏短路、未派发）。
-	var toolSteps int
-	trajDB.QueryRow(`SELECT COUNT(*) FROM trajectory_steps WHERE step_type='tool_call'`).Scan(&toolSteps)
-	if toolSteps != 1 {
-		t.Fatalf("expected exactly 1 tool_call step (dup short-circuited), got %d", toolSteps)
+	if disp.lastArgs["table"] != "t1" {
+		t.Fatalf("args did not plumb through: %v", disp.lastArgs)
 	}
 }
 
@@ -346,116 +186,6 @@ func TestMockLLM_SubstringRouting_Standalone(t *testing.T) {
 	}
 }
 
-func TestBuildPrompt_Structure(t *testing.T) {
-	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
-	got := buildPrompt("SYSTEM", "SCHEMA-DIGEST", now, "运营问题示例")
-	expectedNowUnix := now.Unix()
-	for _, want := range []string{
-		"SYSTEM",
-		"SCHEMA-DIGEST",
-		"## 当前时间",
-		"今天是 2026-05-30",
-		fmt.Sprintf("unix=%d", expectedNowUnix),
-		"## 运营问题\n运营问题示例",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("prompt missing %q:\n%s", want, got)
-		}
-	}
-	// 预算 cutoff 表：每个常用窗口都有具体 unix 数字
-	for _, d := range cutoffWindowsDays {
-		want := fmt.Sprintf("%d 日：cutoff = %d", d, expectedNowUnix-int64(d)*86400)
-		if !strings.Contains(got, want) {
-			t.Fatalf("prompt missing precomputed cutoff %q:\n%s", want, got)
-		}
-	}
-}
-
-func TestBuildPrompt_OmitsEmptySchemaContext(t *testing.T) {
-	got := buildPrompt("SYS", "", time.Now(), "Q")
-	if strings.Contains(got, "\n\n\n") {
-		t.Fatalf("empty schemaContext must not leave triple newline:\n%s", got)
-	}
-}
-
-// recordingMock 记录每次收到的 conversation prompt，供断言注入内容。
-type recordingMock struct {
-	responses []string
-	idx       int
-	prompts   []string
-}
-
-func (m *recordingMock) Call(_ context.Context, prompt string) (string, int, int, float64, error) {
-	m.prompts = append(m.prompts, prompt)
-	if m.idx >= len(m.responses) {
-		return "（recordingMock exhausted）", 1, 1, 0, nil
-	}
-	r := m.responses[m.idx]
-	m.idx++
-	return r, len(r) / 4, len(r) / 4, 0, nil
-}
-func (m *recordingMock) Model() string { return "mock-rec" }
-
-var _ llm.Client = (*recordingMock)(nil)
-
-// TestRunner_InjectsResultID_OKOnly：成功结果注入 `结果 id: q{N}`（OK-only 编号），
-// 失败结果注入「不计入结果编号」。(b') 修复 B：agent 抄 id 而非数。
-func TestRunner_InjectsResultID_OKOnly(t *testing.T) {
-	ctx := context.Background()
-	schema := loadSchema(t)
-
-	trajDB, err := trajectory.Open(filepath.Join(t.TempDir(), "traj.db"))
-	if err != nil {
-		t.Fatalf("traj open: %v", err)
-	}
-	t.Cleanup(func() { trajDB.Close() })
-	if err := trajectory.Migrate(trajDB); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-
-	// analyze 工具：第 1 次返回 SCHEMA_ERROR（不计入编号），之后返回 OK。
-	var analyzeCallCount int
-	reg := tools.NewRegistry()
-	reg.Register("analyze", func(c context.Context, args map[string]any) (contract.Response, error) {
-		analyzeCallCount++
-		if analyzeCallCount == 1 {
-			return contract.Response{Status: contract.StatusSchemaError, Hint: "列名错"}, nil
-		}
-		return contract.Response{Status: contract.StatusOK,
-			Table: &contract.TableResult{
-				Columns: []contract.ColumnMeta{{Name: "n"}}, Rows: [][]any{{42.0}}, RowCount: 1}}, nil
-	})
-
-	// 三次 analyze（table 相同、group_by 各异以绕过去重护栏）：fail → ok(q1) → ok(q2)，再最终答案。
-	mock := &recordingMock{responses: []string{
-		`{"tool":"analyze","args":{"table":"player_basics","group_by":"a"}}`,
-		`{"tool":"analyze","args":{"table":"player_basics","group_by":"b"}}`,
-		`{"tool":"analyze","args":{"table":"player_basics","group_by":"c"}}`,
-		"最终报告：n=42。",
-	}}
-
-	opener := func(c context.Context, ver, q string) (agent.TrajectoryStore, error) {
-		return trajectory.New(c, trajDB, ver, q, "benchmark")
-	}
-	runner := New(mock, reg, opener, schema.Digest())
-	if _, err := runner.Run(ctx, "测试 q-index 注入"); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-
-	if analyzeCallCount != 3 {
-		t.Fatalf("三次 analyze 应都派发（去重护栏不应吞调用），实际 %d 次", analyzeCallCount)
-	}
-
-	last := mock.prompts[len(mock.prompts)-1]
-	for _, want := range []string{"结果 id: q1", "结果 id: q2", "不计入结果编号"} {
-		if !strings.Contains(last, want) {
-			t.Errorf("注入对话缺 %q:\n%s", want, last)
-		}
-	}
-	if strings.Contains(last, "结果 id: q3") {
-		t.Errorf("失败调用不应占用编号（不应出现 q3）:\n%s", last)
-	}
-}
 
 // TestSystemPrompt_QIDCopyGuidance：归因规范须指引「抄印出的结果 id、不要自己数」，
 // 并说明数字列下标可用。(b') 修复的 prompt 兜底。
@@ -657,4 +387,49 @@ func TestDetectorOrderingAndGuards(t *testing.T) {
 			t.Fatalf("got (%q,%v) args=%v, want project-format analyze", got.Tool, ok, got.Args)
 		}
 	})
+}
+
+func TestRun_DedupEmitsCachedToolResult(t *testing.T) {
+	// 模型两轮发同一查询；第二次应被 dedup 拦截（dispatch 只发生一次），第三轮给答案。
+	model := &fakeModel{responses: []*schema.Message{
+		asMsg(10, 5, tc("c1", "query_distribution", `{"table":"t","column":"c"}`)),
+		asMsg(10, 5, tc("c2", "query_distribution", `{"table":"t","column":"c"}`)),
+		finalMsg("答案"),
+	}}
+	disp := &stubDispatcher{resp: map[string]contract.Response{"query_distribution": {Status: contract.StatusOK}}}
+	rec := &fakeRecorder{}
+	ans, err := newTestRunner(model, disp, rec).Run(context.Background(), "q")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if ans != "答案" {
+		t.Fatalf("answer=%q", ans)
+	}
+	// dispatch 只发生一次（第二次被 dedup 拦截，不重跑不录）。
+	if len(rec.toolCalls) != 1 {
+		t.Fatalf("expect 1 real dispatch, got %d (%v)", len(rec.toolCalls), rec.toolCalls)
+	}
+}
+
+func TestRun_MultiToolCallsPerTurn(t *testing.T) {
+	// 一轮两个不同 tool_use，都 OK：两次 dispatch，各配 tool_result。
+	model := &fakeModel{responses: []*schema.Message{
+		asMsg(10, 5,
+			tc("a", "query_distribution", `{"table":"t1","column":"c"}`),
+			tc("b", "analyze", `{"table":"t2"}`),
+		),
+		finalMsg("done"),
+	}}
+	disp := &stubDispatcher{resp: map[string]contract.Response{
+		"query_distribution": {Status: contract.StatusOK},
+		"analyze":            {Status: contract.StatusOK},
+	}}
+	rec := &fakeRecorder{}
+	_, err := newTestRunner(model, disp, rec).Run(context.Background(), "q")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(rec.toolCalls) != 2 {
+		t.Fatalf("want 2 dispatches, got %v", rec.toolCalls)
+	}
 }

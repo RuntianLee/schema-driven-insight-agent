@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudwego/eino/components/model"
+
 	"github.com/RuntianLee/schema-driven-insight-agent/advisor"
 	"github.com/RuntianLee/schema-driven-insight-agent/agent"
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
@@ -45,9 +47,12 @@ type Config struct {
 	EvalOrder  []string             // 报告列顺序（也定 gate 范围）
 	Tasks      []TaskInput
 	TrajDB     *sql.DB // 非 nil 则把每任务完整轨迹 + verdict 落库（task_class=benchmark）；nil 退回纯内存
-	// AgentLLM 非 nil 则 agent 用它推理（真评测道），task.LLMTurns 被忽略；
-	// nil 则退回 sequencedMock（确定性 mock 道，CI 默认）。
+	// AgentLLM 是 Advisor 腿的真 client（真评测道）；agent 腿已改用 AgentModel。nil 时 advisor 走 sequencedMock。
 	AgentLLM llm.Client
+	// AgentModel 非 nil 则 agent 腿用它推理（真评测道，Eino ChatModel）；nil 则退回 scriptedModel(task.LLMTurns)（mock 道）。
+	AgentModel model.ToolCallingChatModel
+	// AgentModelName 是 agent 腿模型名（trajectory 记录用）；mock 道可空。
+	AgentModelName string
 	// ReflectionProvider 非 nil 则在 agent 跑每个任务前，把其返回的上下文前置注入 question
 	// （reflection 开，A/B 的 config B）；nil（默认）= reflection 关（config A / 既有行为）。
 	ReflectionProvider ReflectionProvider
@@ -62,9 +67,9 @@ type Config struct {
 func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 	rep := evalpkg.NewReport(cfg.EvalOrder)
 	for _, task := range cfg.Tasks {
-		var agentClient llm.Client = cfg.AgentLLM
-		if agentClient == nil {
-			agentClient = newSequencedMock(task.LLMTurns)
+		var agentModel model.ToolCallingChatModel = cfg.AgentModel
+		if agentModel == nil {
+			agentModel = newScriptedModel(task.LLMTurns) // mock 道：文本 content → Runner fallback 解析
 		}
 		capture := trajcapture.New()
 		var store agent.TrajectoryStore = capture
@@ -80,7 +85,7 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		opener := func(_ context.Context, _, _ string) (agent.TrajectoryStore, error) {
 			return store, nil
 		}
-		runner := eino_agent.New(agentClient, cfg.Dispatcher, opener, cfg.SchemaCtx)
+		runner := eino_agent.New(agentModel, cfg.AgentModelName, cfg.Dispatcher, opener, cfg.SchemaCtx)
 		runQuestion := applyReflection(ctx, cfg.ReflectionProvider, task.ID, task.Question)
 		rawAnswer, runErr := runner.Run(ctx, runQuestion)
 		claims, answer := parseAttributionOutput(rawAnswer)

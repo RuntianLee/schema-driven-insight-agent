@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudwego/eino/components/model"
+
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
 	"github.com/RuntianLee/schema-driven-insight-agent/eino_agent"
 	evalpkg "github.com/RuntianLee/schema-driven-insight-agent/eval_harness"
@@ -113,10 +115,31 @@ func judgeClientFor(opts Options, realJudge llm.Client) llm.Client {
 // runPass 是可复用的单轮评测核心：对 taskList 逐任务 seed fixture → RunSuite → 合并报告。
 // provider 非 nil 则开 reflection（config B）；nil 为 baseline（config A）。
 // trajDB 非 nil 则落轨迹；nil 则纯内存。
+// agentModel 非 nil 则 agent 腿用注入模型（测试 fake / 真道 ChatModel）；nil 则走 opts.UseRealLLM 自动建模或退回 scriptedModel。
 func runPass(
 	schema *schema_protocol.Schema, taskList []tasks.Task, opts Options,
-	agentLLM, judge llm.Client, provider runners.ReflectionProvider, trajDB *sql.DB,
+	agentLLM, judge llm.Client, agentModel model.ToolCallingChatModel,
+	provider runners.ReflectionProvider, trajDB *sql.DB,
 ) (*evalpkg.Report, error) {
+	// 真评测道且调用方未注入 agentModel：从 config 建 anthropic-wire ChatModel。
+	// advisor/judge 仍用 agentLLM/judge client（llm.Client 接口，保持不变）。
+	var agentModelName string
+	if agentModel == nil && opts.UseRealLLM {
+		cfgData, err := os.ReadFile(opts.ConfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("读取 LLM config（agent ChatModel）失败: %w", err)
+		}
+		mmCfg, err := llm.ParseMiniMaxConfig(cfgData)
+		if err != nil {
+			return nil, fmt.Errorf("解析 LLM config 失败: %w", err)
+		}
+		agentModel, err = eino_agent.NewChatModel(context.Background(), mmCfg)
+		if err != nil {
+			return nil, fmt.Errorf("构建 agent ChatModel 失败: %w", err)
+		}
+		agentModelName = mmCfg.Model
+	}
+
 	merged := evalpkg.NewReport(evalOrder)
 	for _, task := range taskList {
 		if opts.OnlyTask != "" && task.ID != opts.OnlyTask {
@@ -163,6 +186,8 @@ func runPass(
 			Tasks:              []runners.TaskInput{toTaskInput(task)},
 			TrajDB:             trajDB,
 			AgentLLM:           agentLLM,
+			AgentModel:         agentModel,
+			AgentModelName:     agentModelName,
 			ReflectionProvider: provider,
 			TaskClass:          opts.TaskClass,
 			AdvisorPlaybook:    advisorPlaybook(schema),
@@ -214,7 +239,7 @@ func Run(opts Options) (*evalpkg.Report, error) {
 		agentLLM, realJudge = real, real
 	}
 
-	merged, err := runPass(schema, taskList, opts, agentLLM, judgeClientFor(opts, realJudge), nil, trajDB)
+	merged, err := runPass(schema, taskList, opts, agentLLM, judgeClientFor(opts, realJudge), nil, nil, trajDB)
 	if err != nil {
 		return nil, err
 	}
