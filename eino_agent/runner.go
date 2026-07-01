@@ -24,6 +24,8 @@ const (
 	maxTurns        = 8
 	maxBudgetTokens = 200_000
 	maxBudgetUSD    = 1.0
+
+	clarifyToolName = "request_clarification"
 )
 
 // Runner 是 Eino Layer 2 的 agent.Runner 实现。
@@ -33,18 +35,20 @@ type Runner struct {
 	tools         agent.ToolDispatcher
 	trajDB        trajDBOpener
 	schemaContext string
+	clarifier     Clarifier
 }
 
 type trajDBOpener func(ctx context.Context, agentVersion, question string) (agent.TrajectoryStore, error)
 
 // New 装配 Runner。传入的 model 在此绑定 ToolInfos（不可变 WithTools）；绑定失败即 panic（装配期错误）。
 func New(m model.ToolCallingChatModel, modelName string, dispatcher agent.ToolDispatcher,
-	opener trajDBOpener, schemaContext string) *Runner {
+	opener trajDBOpener, schemaContext string, clarifier Clarifier) *Runner {
 	bound, err := m.WithTools(ToolInfos())
 	if err != nil {
 		panic(fmt.Sprintf("eino_agent.New: WithTools: %v", err))
 	}
-	return &Runner{model: bound, modelName: modelName, tools: dispatcher, trajDB: opener, schemaContext: schemaContext}
+	return &Runner{model: bound, modelName: modelName, tools: dispatcher,
+		trajDB: opener, schemaContext: schemaContext, clarifier: clarifier}
 }
 
 func (r *Runner) Health(context.Context) error { return nil }
@@ -105,6 +109,12 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 
 		// 逐 tool_use 派发（API 强制每个都配 tool_result）。
 		for _, c := range calls {
+			// request_clarification 拦截：转交 Clarifier，不进 dedup、不派发、不增 okSeq。
+			if c.Function.Name == clarifyToolName {
+				answer := r.clarifier.Ask(ctx, clarifyQuestion(c.Function.Arguments))
+				msgs = append(msgs, schema.ToolMessage(answer, c.ID))
+				continue
+			}
 			args := parseArgs(c.Function.Arguments)
 			key := canonicalToolKey(toolCall{Tool: c.Function.Name, Args: args})
 			if prior, dup := seen[key]; dup {
@@ -150,6 +160,15 @@ func parseArgs(argsJSON string) map[string]any {
 	args := map[string]any{}
 	_ = json.Unmarshal([]byte(argsJSON), &args)
 	return args
+}
+
+// clarifyQuestion 从 request_clarification 的 Arguments(JSON 串) 取 question 字段。
+func clarifyQuestion(argsJSON string) string {
+	var a struct {
+		Question string `json:"question"`
+	}
+	_ = json.Unmarshal([]byte(argsJSON), &a)
+	return a.Question
 }
 
 // serializeMessages 把对话消息列表序列化为 trajectory 存储串（结构化 content 序列化格式）。

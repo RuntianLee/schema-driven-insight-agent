@@ -39,7 +39,7 @@ func (m *capturingModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatMod
 // runnerWith 用给定的 model 和 dispatcher 组装 Runner（测试专用）。
 func runnerWith(m model.ToolCallingChatModel, disp agent.ToolDispatcher) *Runner {
 	opener := func(context.Context, string, string) (agent.TrajectoryStore, error) { return &fakeRecorder{}, nil }
-	return New(m, "test", disp, opener, "")
+	return New(m, "test", disp, opener, "", NonInteractiveClarifier{})
 }
 
 // flattenToolMsgs 只收集 tool_result 消息（Role==Tool）的 Content 拼成一个字符串，
