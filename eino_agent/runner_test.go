@@ -29,7 +29,7 @@ func (d *stubDispatcher) Dispatch(_ context.Context, name string, args map[strin
 
 func newTestRunner(m *fakeModel, disp agent.ToolDispatcher, rec *fakeRecorder) *Runner {
 	opener := func(context.Context, string, string) (agent.TrajectoryStore, error) { return rec, nil }
-	return New(m, "MiniMax-M2.7", disp, opener, "")
+	return New(m, "MiniMax-M2.7", disp, opener, "", NonInteractiveClarifier{})
 }
 
 func TestRun_SingleToolThenAnswer(t *testing.T) {

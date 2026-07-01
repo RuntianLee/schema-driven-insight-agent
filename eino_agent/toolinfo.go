@@ -11,6 +11,7 @@ func ToolInfos() []*schema.ToolInfo {
 	return []*schema.ToolInfo{
 		queryDistributionToolInfo(),
 		analyzeToolInfo(),
+		clarifyToolInfo(),
 	}
 }
 
@@ -88,6 +89,22 @@ func analyzeToolInfo() *schema.ToolInfo {
 			"limit": {
 				Type: schema.Integer,
 				Desc: "返回行数上限（可选）",
+			},
+		}),
+	}
+}
+
+// clarifyToolInfo 声明 request_clarification：问题实质模糊时，模型自己写反问句作为
+// question 参数发起本工具；runner 拦截、不经数据 ToolDispatcher。
+func clarifyToolInfo() *schema.ToolInfo {
+	return &schema.ToolInfo{
+		Name: "request_clarification",
+		Desc: "当运营问题存在实质模糊（业务口径/时间窗/维度/输出形态不清）且猜错会让整篇答案作废时，向用户反问以澄清。参数 question 是你要问用户的一句话。仅在实质模糊时使用；琐碎可安全默认的歧义不要用本工具。",
+		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+			"question": {
+				Type:     schema.String,
+				Desc:     "要问用户的澄清问题（一句话，诱导用户给出可独立成立的答复）",
+				Required: true,
 			},
 		}),
 	}

@@ -135,7 +135,9 @@ func main() {
 		return trajectory.New(ctx, trajDB, agentVersion, question, "production")
 	}
 	digest := schema.Digest()
-	runner := eino_agent.New(chatModel, agentCfg.Model, registry, opener, digest)
+	stdinScanner := bufio.NewScanner(os.Stdin)
+	clarifier := eino_agent.NewStdinClarifier(stdinScanner, os.Stdout)
+	runner := eino_agent.New(chatModel, agentCfg.Model, registry, opener, digest, clarifier)
 
 	// ── 选择模式 ──────────────────────────────────────────────────────────
 	if *advise && *q == "" {
@@ -147,7 +149,7 @@ func main() {
 			if schema.Advisor != nil {
 				playbook = schema.Advisor.Playbook
 			}
-			answer, draft, err := runAdvisePipeline(ctx, client, chatModel, agentCfg.Model, registry, digest, playbook, *q)
+			answer, draft, err := runAdvisePipeline(ctx, client, chatModel, agentCfg.Model, registry, digest, playbook, *q, clarifier)
 			if err != nil {
 				log.Fatalf("advise pipeline error: %v", err)
 			}
@@ -157,16 +159,16 @@ func main() {
 			runOnce(ctx, runner, *q)
 		}
 	} else {
-		runREPL(ctx, runner)
+		runREPL(ctx, runner, stdinScanner)
 	}
 }
 
 // runAdvisePipeline 同跑自动接力：Analyst 跑一遍（经 Capture 收结构化结果）→ 构 AnalystOutput → Advisor 出草案。
 func runAdvisePipeline(ctx context.Context, client llm.Client, chatModel model.ToolCallingChatModel, modelName string,
-	registry agent.ToolDispatcher, schemaDigest, playbook, question string) (string, contract.AdvisoryDraft, error) {
+	registry agent.ToolDispatcher, schemaDigest, playbook, question string, clarifier eino_agent.Clarifier) (string, contract.AdvisoryDraft, error) {
 	cap := trajcapture.New()
 	opener := func(_ context.Context, _, _ string) (agent.TrajectoryStore, error) { return cap, nil }
-	runner := eino_agent.New(chatModel, modelName, registry, opener, schemaDigest)
+	runner := eino_agent.New(chatModel, modelName, registry, opener, schemaDigest, clarifier)
 	answer, err := runner.Run(ctx, question)
 	if err != nil {
 		return "", contract.AdvisoryDraft{}, err
@@ -205,8 +207,7 @@ func runOnce(ctx context.Context, runner *eino_agent.Runner, question string) {
 }
 
 // runREPL REPL 模式：循环读 stdin，空行/exit/EOF 退出。
-func runREPL(ctx context.Context, runner *eino_agent.Runner) {
-	sc := bufio.NewScanner(os.Stdin)
+func runREPL(ctx context.Context, runner *eino_agent.Runner, sc *bufio.Scanner) {
 	fmt.Println("数据分析 Agent V0（输入问题回车，空行/exit/EOF 退出）")
 	for {
 		fmt.Print("> ")
