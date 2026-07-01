@@ -389,3 +389,47 @@ func TestDetectorOrderingAndGuards(t *testing.T) {
 	})
 }
 
+func TestRun_DedupEmitsCachedToolResult(t *testing.T) {
+	// 模型两轮发同一查询；第二次应被 dedup 拦截（dispatch 只发生一次），第三轮给答案。
+	model := &fakeModel{responses: []*schema.Message{
+		asMsg(10, 5, tc("c1", "query_distribution", `{"table":"t","column":"c"}`)),
+		asMsg(10, 5, tc("c2", "query_distribution", `{"table":"t","column":"c"}`)),
+		finalMsg("答案"),
+	}}
+	disp := &stubDispatcher{resp: map[string]contract.Response{"query_distribution": {Status: contract.StatusOK}}}
+	rec := &fakeRecorder{}
+	ans, err := newTestRunner(model, disp, rec).Run(context.Background(), "q")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if ans != "答案" {
+		t.Fatalf("answer=%q", ans)
+	}
+	// dispatch 只发生一次（第二次被 dedup 拦截，不重跑不录）。
+	if len(rec.toolCalls) != 1 {
+		t.Fatalf("expect 1 real dispatch, got %d (%v)", len(rec.toolCalls), rec.toolCalls)
+	}
+}
+
+func TestRun_MultiToolCallsPerTurn(t *testing.T) {
+	// 一轮两个不同 tool_use，都 OK：两次 dispatch，各配 tool_result。
+	model := &fakeModel{responses: []*schema.Message{
+		asMsg(10, 5,
+			tc("a", "query_distribution", `{"table":"t1","column":"c"}`),
+			tc("b", "analyze", `{"table":"t2"}`),
+		),
+		finalMsg("done"),
+	}}
+	disp := &stubDispatcher{resp: map[string]contract.Response{
+		"query_distribution": {Status: contract.StatusOK},
+		"analyze":            {Status: contract.StatusOK},
+	}}
+	rec := &fakeRecorder{}
+	_, err := newTestRunner(model, disp, rec).Run(context.Background(), "q")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(rec.toolCalls) != 2 {
+		t.Fatalf("want 2 dispatches, got %v", rec.toolCalls)
+	}
+}
