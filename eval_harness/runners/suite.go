@@ -85,7 +85,7 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		opener := func(_ context.Context, _, _ string) (agent.TrajectoryStore, error) {
 			return store, nil
 		}
-		runner := eino_agent.New(agentModel, cfg.AgentModelName, cfg.Dispatcher, opener, cfg.SchemaCtx)
+		runner := eino_agent.New(agentModel, cfg.AgentModelName, cfg.Dispatcher, opener, cfg.SchemaCtx, eino_agent.NonInteractiveClarifier{})
 		runQuestion := applyReflection(ctx, cfg.ReflectionProvider, task.ID, task.Question)
 		rawAnswer, runErr := runner.Run(ctx, runQuestion)
 		claims, answer := parseAttributionOutput(rawAnswer)
