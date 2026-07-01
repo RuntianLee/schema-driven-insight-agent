@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
+
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
 	"github.com/RuntianLee/schema-driven-insight-agent/eval_harness/evaluators"
 	"github.com/RuntianLee/schema-driven-insight-agent/schema_protocol"
@@ -271,37 +274,42 @@ func suiteFixtureDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// fakeAgentLLM 记录被调用次数，返回固定纯文本（被 runner 当作 final answer）。
-type fakeAgentLLM struct {
-	calls int
+// fakeAgentModel 记录被调用次数，返回固定纯文本（被 Runner 当作 final answer）。
+type fakeAgentModel struct {
 	resp  string
+	calls int
 }
 
-func (f *fakeAgentLLM) Call(_ context.Context, _ string) (string, int, int, float64, error) {
+func (f *fakeAgentModel) Generate(_ context.Context, _ []*schema.Message, _ ...model.Option) (*schema.Message, error) {
 	f.calls++
-	return f.resp, 1, 1, 0, nil
+	return &schema.Message{Role: schema.Assistant, Content: f.resp}, nil
 }
-func (f *fakeAgentLLM) Model() string { return "fake-agent" }
+func (f *fakeAgentModel) Stream(context.Context, []*schema.Message, ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	panic("unused")
+}
+func (f *fakeAgentModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	return f, nil
+}
 
-func TestRunSuiteAgentLLMInjection(t *testing.T) {
-	fake := &fakeAgentLLM{resp: "（fake）最终回答"}
+func TestRunSuiteAgentModelInjection(t *testing.T) {
+	fake := &fakeAgentModel{resp: "（fake）最终回答"}
 	cfg := Config{
 		Dispatcher: tools.NewRegistry(), // 空 registry：fake 返回纯文本，不触发 tool 调用
 		SchemaCtx:  "schema-x",
 		EvalReg:    evaluators.NewRegistry(),
 		EvalOrder:  nil,
-		AgentLLM:   fake, // 非 nil → 用注入 client 而非 sequencedMock
+		AgentModel: fake, // 非 nil → 用注入 ChatModel 而非 scriptedModel
 		Tasks: []TaskInput{{
 			ID:       "t1",
 			Question: "随便问",
-			LLMTurns: nil, // 故意为空：若仍走 sequencedMock 会 exhausted，证明被忽略
+			LLMTurns: nil, // 故意为空：若仍走 scriptedModel 会返回空串（不报错），但 fake.calls 为 0 → fail
 		}},
 	}
 	if _, err := RunSuite(context.Background(), cfg); err != nil {
 		t.Fatalf("RunSuite error: %v", err)
 	}
 	if fake.calls == 0 {
-		t.Fatal("AgentLLM 被注入却从未被调用——注入口未生效")
+		t.Fatal("AgentModel 被注入却从未被调用——注入口未生效")
 	}
 }
 

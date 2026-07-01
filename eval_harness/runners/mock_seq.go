@@ -5,6 +5,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
+
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
 )
 
@@ -32,3 +35,33 @@ func (m *sequencedMock) Model() string { return "mock-seq" }
 
 // 编译期断言：满足 llm.Client。
 var _ llm.Client = (*sequencedMock)(nil)
+
+// scriptedModel 是 eval mock 道的确定性 agent 模型：按序把 turns 作为 assistant message.Content
+// 返回（无结构化 ToolCalls），由 Runner 的 fallback 探测器链解析文本工具调用——保持迁移前 mock
+// 道行为不变。耗尽后钳在最后一条（同 sequencedMock 语义）。
+type scriptedModel struct {
+	turns []string
+	i     int
+}
+
+func newScriptedModel(turns []string) *scriptedModel { return &scriptedModel{turns: turns} }
+
+func (m *scriptedModel) Generate(_ context.Context, _ []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+	content := ""
+	if len(m.turns) > 0 {
+		content = m.turns[m.i]
+		if m.i < len(m.turns)-1 {
+			m.i++
+		}
+	}
+	return &schema.Message{Role: schema.Assistant, Content: content}, nil
+}
+
+func (m *scriptedModel) Stream(context.Context, []*schema.Message, ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	panic("scriptedModel.Stream unused")
+}
+
+func (m *scriptedModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) { return m, nil }
+
+// 编译期断言：满足 model.ToolCallingChatModel。
+var _ model.ToolCallingChatModel = (*scriptedModel)(nil)
