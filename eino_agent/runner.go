@@ -1,7 +1,7 @@
 // Package eino_agent 是 agent.Runner 的 Eino 实现（Layer 2：手驱 ChatModel 循环 +
 // 结构化 tool_use）。四道护栏（dedup/q-index/预算闸/maxTurns）为明文 Go；探测器链
-// 降级为 provider 回退文本的 defense-in-depth fallback。trajectory 暂手工 Record*
-// （后续任务换 callback）。
+// 降级为 provider 回退文本的 defense-in-depth fallback。trajectory 由 per-Run callback
+// handler 接管（withTrajectory + recordedDispatch），业务循环零手工 Record*。
 package eino_agent
 
 import (
@@ -62,6 +62,7 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 			panic(rec)
 		}
 	}()
+	ctx = withTrajectory(ctx, traj, r.modelName) // per-Run callback handler 接管 Record*
 
 	msgs := []*schema.Message{
 		schema.SystemMessage(buildSystemPrompt(prompts.SystemV0, r.schemaContext, time.Now())),
@@ -74,16 +75,12 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 	var spentUSD float64
 
 	for turn := 0; turn < maxTurns; turn++ {
-		t0 := time.Now()
-		as, genErr := r.model.Generate(ctx, msgs)
-		t1 := time.Now()
+		as, genErr := r.model.Generate(ctx, msgs) // callback → RecordLLMCall（真模型自动触发）
 		var tokIn, tokOut int
 		if as != nil && as.ResponseMeta != nil && as.ResponseMeta.Usage != nil {
 			tokIn = as.ResponseMeta.Usage.PromptTokens
 			tokOut = as.ResponseMeta.Usage.CompletionTokens
 		}
-		traj.RecordLLMCall(serializeMessages(msgs), serializeAssistant(as), r.modelName,
-			tokIn, tokOut, llm.CostUSD(tokIn, tokOut), t0, t1, genErr)
 		if genErr != nil {
 			_ = traj.Finalize(ctx, "error", "", genErr.Error())
 			return "", genErr
@@ -116,9 +113,7 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 					c.ID))
 				continue
 			}
-			ts := time.Now()
-			toolResp, _ := r.tools.Dispatch(ctx, c.Function.Name, args)
-			traj.RecordToolCall(c.Function.Name, args, toolResp, ts, time.Now(), nil)
+			toolResp, _ := recordedDispatch(ctx, r.tools, c.Function.Name, args) // callback → RecordToolCall
 			resultJSON, _ := json.Marshal(toolResp)
 			seen[key] = string(resultJSON)
 			var content string
