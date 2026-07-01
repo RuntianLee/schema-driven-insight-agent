@@ -47,6 +47,9 @@ func New(m model.ToolCallingChatModel, modelName string, dispatcher agent.ToolDi
 	if err != nil {
 		panic(fmt.Sprintf("eino_agent.New: WithTools: %v", err))
 	}
+	if clarifier == nil {
+		clarifier = NonInteractiveClarifier{}
+	}
 	return &Runner{model: bound, modelName: modelName, tools: dispatcher,
 		trajDB: opener, schemaContext: schemaContext, clarifier: clarifier}
 }
@@ -168,6 +171,9 @@ func clarifyQuestion(argsJSON string) string {
 		Question string `json:"question"`
 	}
 	_ = json.Unmarshal([]byte(argsJSON), &a)
+	if a.Question == "" {
+		return "(模型未提供澄清问题)"
+	}
 	return a.Question
 }
 
