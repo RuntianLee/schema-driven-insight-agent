@@ -30,3 +30,18 @@ func TestNewChatModel_BuildsBoundModel(t *testing.T) {
 		t.Fatalf("WithTools: %v", err)
 	}
 }
+
+func TestBaseURLFromEndpoint(t *testing.T) {
+	cases := map[string]string{
+		"https://www.okaoi.com/v1/messages":          "https://www.okaoi.com",
+		"https://www.okaoi.com/v1/messages/":         "https://www.okaoi.com",
+		"https://www.okaoi.com":                      "https://www.okaoi.com",
+		"https://www.okaoi.com/":                     "https://www.okaoi.com",
+		"https://api.example.com/base/v1/messages":   "https://api.example.com/base",
+	}
+	for in, want := range cases {
+		if got := baseURLFromEndpoint(in); got != want {
+			t.Errorf("baseURLFromEndpoint(%q)=%q want %q", in, got, want)
+		}
+	}
+}
