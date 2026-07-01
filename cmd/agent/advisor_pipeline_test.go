@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
+	"github.com/RuntianLee/schema-driven-insight-agent/eino_agent"
 	"github.com/RuntianLee/schema-driven-insight-agent/tools"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -66,7 +67,7 @@ func TestRunAdvisePipeline(t *testing.T) {
 			ResponseMeta: &schema.ResponseMeta{Usage: &schema.TokenUsage{PromptTokens: 1, CompletionTokens: 1}}},
 	}}
 
-	answer, draft, err := runAdvisePipeline(context.Background(), client, analyst, "seq", reg, "SCHEMA-DIGEST", "playbook 文本", "各国客户流失？")
+	answer, draft, err := runAdvisePipeline(context.Background(), client, analyst, "seq", reg, "SCHEMA-DIGEST", "playbook 文本", "各国客户流失？", eino_agent.NonInteractiveClarifier{})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
 	}
