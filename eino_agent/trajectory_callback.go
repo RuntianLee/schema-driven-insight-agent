@@ -66,10 +66,11 @@ func buildTrajHandler(b *trajBundle) callbacks.Handler {
 				}
 				b.store.RecordLLMCall(prompt, resp, b.modelName, tokIn, tokOut, llm.CostUSD(tokIn, tokOut), start, end, nil)
 			case components.ComponentOfTool:
-				to := tool.ConvCallbackOutput(out)
 				name, _ := ctx.Value(toolNameCtxKey{}).(string)
 				var output any
-				if to != nil {
+				if resp := ctx.Value(toolRespCtxKey{}); resp != nil {
+					output = resp // 结构化 contract.Response，保 trajcapture/AnalystResults 类型断言
+				} else if to := tool.ConvCallbackOutput(out); to != nil {
 					output = to.Response
 				}
 				b.store.RecordToolCall(name, ctx.Value(toolArgsCtxKey{}), output, start, end, nil)

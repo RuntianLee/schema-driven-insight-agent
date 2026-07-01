@@ -14,6 +14,7 @@ import (
 
 type toolNameCtxKey struct{}
 type toolArgsCtxKey struct{}
+type toolRespCtxKey struct{}
 
 // recordedDispatch 调 ToolDispatcher.Dispatch，并发 Tool 组件回调（OnStart/OnEnd）使
 // per-Run handler 录 RecordToolCall——业务循环不再手工 Record*（zero-invasion）。
@@ -30,6 +31,7 @@ func recordedDispatch(ctx context.Context, d agent.ToolDispatcher, name string, 
 		return resp, err
 	}
 	respJSON, _ := json.Marshal(resp)
+	ctx = context.WithValue(ctx, toolRespCtxKey{}, resp) // 透传结构化 contract.Response 给 handler（保 trajcapture 类型断言）
 	callbacks.OnEnd(ctx, &tool.CallbackOutput{Response: string(respJSON)})
 	return resp, nil
 }
