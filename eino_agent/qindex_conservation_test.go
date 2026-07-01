@@ -106,3 +106,33 @@ func TestConservation_QIndexOnlyOnOK(t *testing.T) {
 		t.Errorf("okSeq 不应因非 OK 结果而跳到 q2，轮3输入:\n%s", turn3In)
 	}
 }
+
+// hintDispatcher 返回带 Hint 的 SCHEMA_ERROR，用于验证 hint 回注自修正路径。
+type hintDispatcher struct{ hint string }
+
+func (d hintDispatcher) Dispatch(_ context.Context, _ string, _ map[string]any) (contract.Response, error) {
+	return contract.Response{Status: contract.StatusSchemaError, Hint: d.hint}, nil
+}
+
+// TestConservation_SchemaErrorHintFedBack 验证 SCHEMA_ERROR 的 hint + 修正提示回注下一轮模型输入。
+func TestConservation_SchemaErrorHintFedBack(t *testing.T) {
+	const hint = "unknown field 'filter'; did you mean 'filters'?"
+	m := &capturingModel{responses: []*schema.Message{
+		asMsg(1, 1, tc("c1", "analyze", `{"table":"t","filter":{}}`)),
+		finalMsg("修正后答案"),
+	}}
+	if _, err := runnerWith(m, hintDispatcher{hint: hint}).Run(context.Background(), "q"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// m.seen[1] = 第二轮输入，含第一轮的 SCHEMA_ERROR tool_result。
+	turn2Tools := flattenToolMsgs(m.seen[1])
+	if !strings.Contains(turn2Tools, hint) {
+		t.Errorf("SCHEMA_ERROR 的 hint 未回注下一轮，tool 消息:\n%s", turn2Tools)
+	}
+	if !strings.Contains(turn2Tools, "请修正后重试") {
+		t.Errorf("缺自修正提示「请修正后重试」，tool 消息:\n%s", turn2Tools)
+	}
+	if !strings.Contains(turn2Tools, "不计入结果编号") {
+		t.Errorf("非 OK 结果应标「不计入结果编号」，tool 消息:\n%s", turn2Tools)
+	}
+}
