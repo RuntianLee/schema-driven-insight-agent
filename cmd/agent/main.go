@@ -23,6 +23,7 @@ import (
 	"github.com/RuntianLee/schema-driven-insight-agent/agent"
 	"github.com/RuntianLee/schema-driven-insight-agent/contract"
 	"github.com/RuntianLee/schema-driven-insight-agent/eino_agent"
+	"github.com/cloudwego/eino/components/model"
 	"github.com/RuntianLee/schema-driven-insight-agent/etl_health"
 	"github.com/RuntianLee/schema-driven-insight-agent/llm"
 	"github.com/RuntianLee/schema-driven-insight-agent/prompts"
@@ -96,6 +97,20 @@ func main() {
 		log.Fatalf("LLM 客户端初始化失败: %v", err)
 	}
 
+	// Agent 腿：从同一 config 建 anthropic-wire ChatModel（judge/advisor 仍用上面的 client）。
+	cfgData, err := os.ReadFile(*configPath)
+	if err != nil {
+		log.Fatalf("读取 LLM config 失败（Agent 腿需 anthropic 配置，不再退回 mock）: %v", err)
+	}
+	agentCfg, err := llm.ParseMiniMaxConfig(cfgData)
+	if err != nil {
+		log.Fatalf("解析 LLM config 失败: %v", err)
+	}
+	chatModel, err := eino_agent.NewChatModel(ctx, agentCfg)
+	if err != nil {
+		log.Fatalf("构建 Agent ChatModel 失败: %v", err)
+	}
+
 	// ── 6. 构建 tools.Registry ────────────────────────────────────────────
 	distTool := tools.NewDistributionTool(schema, bizDB)
 	registry := tools.NewRegistry()
@@ -120,7 +135,7 @@ func main() {
 		return trajectory.New(ctx, trajDB, agentVersion, question, "production")
 	}
 	digest := schema.Digest()
-	runner := eino_agent.New(client, registry, opener, digest)
+	runner := eino_agent.New(chatModel, agentCfg.Model, registry, opener, digest)
 
 	// ── 选择模式 ──────────────────────────────────────────────────────────
 	if *advise && *q == "" {
@@ -132,7 +147,7 @@ func main() {
 			if schema.Advisor != nil {
 				playbook = schema.Advisor.Playbook
 			}
-			answer, draft, err := runAdvisePipeline(ctx, client, registry, digest, playbook, *q)
+			answer, draft, err := runAdvisePipeline(ctx, client, chatModel, agentCfg.Model, registry, digest, playbook, *q)
 			if err != nil {
 				log.Fatalf("advise pipeline error: %v", err)
 			}
@@ -147,11 +162,11 @@ func main() {
 }
 
 // runAdvisePipeline 同跑自动接力：Analyst 跑一遍（经 Capture 收结构化结果）→ 构 AnalystOutput → Advisor 出草案。
-func runAdvisePipeline(ctx context.Context, client llm.Client, registry agent.ToolDispatcher,
-	schemaDigest, playbook, question string) (string, contract.AdvisoryDraft, error) {
+func runAdvisePipeline(ctx context.Context, client llm.Client, chatModel model.ToolCallingChatModel, modelName string,
+	registry agent.ToolDispatcher, schemaDigest, playbook, question string) (string, contract.AdvisoryDraft, error) {
 	cap := trajcapture.New()
 	opener := func(_ context.Context, _, _ string) (agent.TrajectoryStore, error) { return cap, nil }
-	runner := eino_agent.New(client, registry, opener, schemaDigest)
+	runner := eino_agent.New(chatModel, modelName, registry, opener, schemaDigest)
 	answer, err := runner.Run(ctx, question)
 	if err != nil {
 		return "", contract.AdvisoryDraft{}, err
