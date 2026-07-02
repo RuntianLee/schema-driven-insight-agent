@@ -82,3 +82,29 @@ func TestSystemPromptDerivedCallFormAndOneAnchor(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemPromptClarificationCaliberUniqueness(t *testing.T) {
+	// C1b：澄清节须以「口径唯一性自检」为核心、术语无关、含条件硬门 + few-shot。
+	for _, want := range []string{
+		"口径唯一性自检",
+		"举例、不是白名单",
+		"本轮禁止直接发",
+		"命中即先反问",
+		"合法取值只有一个",
+		"永远不算",
+	} {
+		if !strings.Contains(SystemV0, want) {
+			t.Fatalf("system prompt 澄清节缺 %q（C1b 触发力）", want)
+		}
+	}
+}
+
+func TestSystemPromptNoUnconditionalBigRRecipe(t *testing.T) {
+	// C1b R1：第 9 行旧「大 R 下钻套路」的无条件教学形态必须消除（改为口径条件化）。
+	if strings.Contains(SystemV0, "大 R 分位下钻** = 先") {
+		t.Fatal("system prompt 仍含无条件『大 R 分位下钻 = 先 query_distribution』套路；须改为口径条件化")
+	}
+	if !strings.Contains(SystemV0, "不要默认套 p99") {
+		t.Fatal("system prompt 须显式禁止未给阈值时默认套 p99")
+	}
+}
