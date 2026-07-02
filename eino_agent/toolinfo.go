@@ -99,7 +99,7 @@ func analyzeToolInfo() *schema.ToolInfo {
 func clarifyToolInfo() *schema.ToolInfo {
 	return &schema.ToolInfo{
 		Name: "request_clarification",
-		Desc: "当运营问题存在实质模糊（业务口径/时间窗/维度/输出形态不清）且猜错会让整篇答案作废时，向用户反问以澄清。参数 question 是你要问用户的一句话。仅在实质模糊时使用；琐碎可安全默认的歧义不要用本工具。",
+		Desc: "当运营问题的口径无法唯一确定（业务术语无定义阈值 / 时间窗 / 维度 / 输出形态不清）、猜错会让整篇答案作废时，向用户反问以澄清。参数 question 是你要问用户的一句话。仅在口径无法唯一确定时使用；口径唯一（如合法取值集=1，全库只有一种货币）可安全默认的歧义不要用本工具。",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"question": {
 				Type:     schema.String,
