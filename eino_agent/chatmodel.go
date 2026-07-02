@@ -14,7 +14,7 @@ import (
 // anthropicDefaultMaxTokens：cfg 未设 max_tokens 时的默认上限（须 >0）。
 const anthropicDefaultMaxTokens = 4096
 
-// NewChatModel 从 MiniMaxConfig 建 Agent 腿的 claude ChatModel（anthropic wire / okaoi）。
+// NewChatModel 从 MiniMaxConfig 建 Agent 腿的 claude ChatModel（anthropic wire / 网关）。
 // Agent 腿要求 anthropic wire；openai 格式延后，此处拒绝。
 func NewChatModel(ctx context.Context, cfg llm.MiniMaxConfig) (model.ToolCallingChatModel, error) {
 	if cfg.Format != "anthropic" {

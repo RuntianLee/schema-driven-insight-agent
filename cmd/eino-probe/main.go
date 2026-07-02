@@ -6,7 +6,7 @@
 //
 // 已确定（无需本探针）：Eino 支持 anthropic 格式（eino-ext claude 底层即官方
 // anthropics/anthropic-sdk-go）。本探针验收窄后的真未知：这条具体链路端到端
-// 能否吐/收结构化 tool_use（BaseURL 拼接 / okaoi×MiniMax 经 SDK 的响应解析 /
+// 能否吐/收结构化 tool_use（BaseURL 拼接 / 网关×MiniMax 经 SDK 的响应解析 /
 // anthropic-version 头）。
 //
 // 绝不并发、绝不循环。
@@ -26,12 +26,17 @@ import (
 func main() {
 	// 读配置：endpoint/model 取环境变量（含默认），api_key 必须由环境变量提供——无 secret 入库。
 	// BaseURL 填基址（不含 /v1/messages），SDK 内部追加路径。
-	baseURL := getEnv("EINO_PROBE_BASE_URL", "https://www.okaoi.com")
+	baseURL := getEnv("EINO_PROBE_BASE_URL", "")
 	apiKey := os.Getenv("EINO_PROBE_API_KEY")
 	model := getEnv("EINO_PROBE_MODEL", "MiniMax-M2.7")
 
+	if baseURL == "" {
+		fmt.Fprintln(os.Stderr, "错误：请设置 EINO_PROBE_BASE_URL 环境变量（anthropic 兼容网关地址）")
+		os.Exit(1)
+	}
+
 	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "错误：请设置 EINO_PROBE_API_KEY 环境变量（okaoi api key）")
+		fmt.Fprintln(os.Stderr, "错误：请设置 EINO_PROBE_API_KEY 环境变量（网关 api key）")
 		os.Exit(1)
 	}
 
@@ -56,7 +61,7 @@ func run(ctx context.Context, baseURL, apiKey, model string) error {
 		Model:     model,
 		MaxTokens: 512,
 		BaseURL:   &baseURL,
-		// 若 okaoi 拒默认 anthropic-version，解开下行兜底：
+		// 若网关拒默认 anthropic-version，解开下行兜底：
 		// AdditionalHeaderFields: map[string]string{"anthropic-version": "2023-06-01"},
 	})
 	if err != nil {
