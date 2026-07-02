@@ -2,9 +2,14 @@
 package runners
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"errors"
+	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cloudwego/eino/components/model"
@@ -310,6 +315,62 @@ func TestRunSuiteAgentModelInjection(t *testing.T) {
 	}
 	if fake.calls == 0 {
 		t.Fatal("AgentModel 被注入却从未被调用——注入口未生效")
+	}
+}
+
+// erroringAgentModel 恒对 Generate 返回 error，模拟 agent 超预算/panic 之外的运行时故障
+// （M-3：RunErr 须落进 TaskResult 且不 panic 主流程）。
+type erroringAgentModel struct{ err error }
+
+func (f *erroringAgentModel) Generate(context.Context, []*schema.Message, ...model.Option) (*schema.Message, error) {
+	return nil, f.err
+}
+func (f *erroringAgentModel) Stream(context.Context, []*schema.Message, ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	panic("unused")
+}
+func (f *erroringAgentModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	return f, nil
+}
+
+// TestRunSuite_RunErrSurfacedNotPanicking 锁 M-3：runner.Run 失败时 TaskResult.RunErr 非 nil
+// 这一路径须可见（stderr warn），且 RunSuite 不 panic、照常产出报告——运行时故障不再被内容质量
+// FAIL 掩盖。RunSuite 不对外暴露 TaskResult，故用 stderr 输出作为可见性的外部可观测代理
+//（stderr 具体文案不强断言，只断言含任务 ID 与错因）。
+func TestRunSuite_RunErrSurfacedNotPanicking(t *testing.T) {
+	wantErr := errors.New("boom: agent run failed")
+	cfg := Config{
+		Dispatcher: tools.NewRegistry(),
+		SchemaCtx:  "schema-x",
+		EvalReg:    evaluators.NewRegistry(),
+		EvalOrder:  nil,
+		AgentModel: &erroringAgentModel{err: wantErr},
+		Tasks: []TaskInput{{
+			ID:       "t-fail",
+			Question: "随便问",
+		}},
+	}
+
+	origStderr := os.Stderr
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatalf("os.Pipe: %v", pipeErr)
+	}
+	os.Stderr = w
+	rep, err := RunSuite(context.Background(), cfg)
+	w.Close()
+	os.Stderr = origStderr
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+
+	if err != nil {
+		t.Fatalf("RunSuite 不应因单任务 agent 失败而整体报错: %v", err)
+	}
+	if rep == nil {
+		t.Fatal("expected report even when agent run fails")
+	}
+	stderrOut := buf.String()
+	if !strings.Contains(stderrOut, "t-fail") || !strings.Contains(stderrOut, "boom: agent run failed") {
+		t.Fatalf("stderr 应可见地暴露 RunErr（任务 ID + 错因），got=%q", stderrOut)
 	}
 }
 

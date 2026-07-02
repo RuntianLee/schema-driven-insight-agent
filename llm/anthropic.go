@@ -84,7 +84,7 @@ func (c *minimaxClient) callAnthropic(ctx context.Context, prompt string) (strin
 		return "", 0, 0, 0, err
 	}
 	defer res.Body.Close()
-	raw, _ := io.ReadAll(res.Body)
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, maxLLMResponseBytes))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return "", 0, 0, 0, fmt.Errorf("anthropic http %d: %s", res.StatusCode, string(raw))
 	}

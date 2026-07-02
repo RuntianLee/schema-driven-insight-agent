@@ -52,10 +52,11 @@ type recorder struct {
 	stepIndex int
 	closed    bool // Finalize 后置位，enqueue 拒绝写入（防 send on closed channel）
 
-	ch        chan stepRecord
-	done      chan struct{}
-	closeOnce sync.Once
-	dropped   int64
+	ch          chan stepRecord
+	done        chan struct{}
+	closeOnce   sync.Once
+	dropped     int64
+	writeFailed int64 // persistStep 的 INSERT 失败计数（db 层故障，如只读库/表被删）
 
 	// 仅 writer goroutine 写，done 关闭后才读（无竞争）
 	totalTokens int
@@ -117,7 +118,9 @@ func (r *recorder) persistStep(s stepRecord) {
 		string(inJSON), string(outJSON), s.tokensIn, s.tokensOut, s.costUSD,
 		nullable(s.model), nullable(s.toolName), errStr, nullable(s.role))
 	if err != nil {
-		// 永不干扰主流程（trajectory-spec-v2 §2 #4）：仅吞掉。
+		// 永不干扰主流程（trajectory-spec-v2 §2 #4）：不 panic、不中断 writeLoop，
+		// 但计数以便 Finalize 把故障并入 error_summary（对齐 dropped 的呈现方式）。
+		atomic.AddInt64(&r.writeFailed, 1)
 		return
 	}
 }
@@ -184,6 +187,9 @@ func (r *recorder) Finalize(ctx context.Context, outcome, finalOutput, errSummar
 	})
 	if n := atomic.LoadInt64(&r.dropped); n > 0 {
 		errSummary = strings.TrimSpace(errSummary + fmt.Sprintf(" [trajectory: %d steps dropped]", n))
+	}
+	if n := atomic.LoadInt64(&r.writeFailed); n > 0 {
+		errSummary = strings.TrimSpace(errSummary + fmt.Sprintf(" [trajectory: %d steps write-failed]", n))
 	}
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE trajectories

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 
@@ -102,7 +103,10 @@ func (p *PersistentProvider) Observe(ctx context.Context, res evaluators.TaskRes
 	if !ok {
 		return nil
 	}
-	_, _ = p.store.Upsert(ctx, item)
+	if _, err := p.store.Upsert(ctx, item); err != nil {
+		// 吞错误不吞信号：长期记忆写入失败不应中断评测主流程，但须留可观测痕迹。
+		fmt.Fprintf(os.Stderr, "warn: reflexion memory upsert failed: %v\n", err)
+	}
 	return nil
 }
 

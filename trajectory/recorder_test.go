@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -79,6 +80,39 @@ func TestFinalizeIdempotent(t *testing.T) {
 	}
 	if err := rec.Finalize(ctx, "abort", "", "double"); err != nil {
 		t.Fatalf("second finalize must not panic: %v", err)
+	}
+}
+
+// TestPersistStepFailure_CountedInErrorSummary 锁 M-5：persistStep 写入失败（如表被删/只读库）
+// 须计数并在 Finalize 时并入 error_summary（对齐 dropped 计数器的既有呈现方式），
+// 而不是像此前那样静默吞掉、零可观测性。
+func TestPersistStepFailure_CountedInErrorSummary(t *testing.T) {
+	db := openMigrated(t)
+	ctx := context.Background()
+	rec, err := New(ctx, db, "v0.1.0", "q", "benchmark")
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	// 制造 persistStep 必然失败的条件：trajectory_steps 表在 New 之后被删，
+	// trajectories 表仍在（Finalize 的 UPDATE 仍能成功，从而能读到 error_summary）。
+	if _, err := db.Exec(`DROP TABLE trajectory_steps`); err != nil {
+		t.Fatalf("drop trajectory_steps: %v", err)
+	}
+	now := time.Now()
+	rec.RecordToolCall("query_distribution", nil, nil, now, now, nil)
+	rec.RecordLLMCall("p", "r", "m", 1, 1, 0, now, now, nil)
+
+	if err := rec.Finalize(ctx, "success", "out", ""); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	var errSummary sql.NullString
+	if err := db.QueryRow(`SELECT error_summary FROM trajectories WHERE trajectory_id=?`,
+		rec.TrajectoryID()).Scan(&errSummary); err != nil {
+		t.Fatalf("query error_summary: %v", err)
+	}
+	if !errSummary.Valid || !strings.Contains(errSummary.String, "write-failed") {
+		t.Fatalf("error_summary 应包含写入失败计数信号，got=%q", errSummary.String)
 	}
 }
 

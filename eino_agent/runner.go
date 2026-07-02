@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/cloudwego/eino/components/model"
@@ -65,7 +66,7 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			_ = traj.Finalize(ctx, "abort", "", fmt.Sprintf("panic: %v", rec))
+			finalizeWarn(ctx, traj, "abort", "", fmt.Sprintf("panic: %v", rec))
 			panic(rec)
 		}
 	}()
@@ -89,14 +90,14 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 			tokOut = as.ResponseMeta.Usage.CompletionTokens
 		}
 		if genErr != nil {
-			_ = traj.Finalize(ctx, "error", "", genErr.Error())
+			finalizeWarn(ctx, traj, "error", "", genErr.Error())
 			return "", genErr
 		}
 		msgs = append(msgs, as)
 
 		calls := structuredOrFallbackCalls(as)
 		if len(calls) == 0 {
-			_ = traj.Finalize(ctx, "success", as.Content, "")
+			finalizeWarn(ctx, traj, "success", as.Content, "")
 			return as.Content, nil
 		}
 
@@ -106,7 +107,7 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 		if spentTokens > maxBudgetTokens || spentUSD > maxBudgetUSD {
 			msg := fmt.Sprintf("budget exceeded: tokens=%d (max %d) cost=$%.4f (max $%.2f)",
 				spentTokens, maxBudgetTokens, spentUSD, maxBudgetUSD)
-			_ = traj.Finalize(ctx, "error", "", msg)
+			finalizeWarn(ctx, traj, "error", "", msg)
 			return "", fmt.Errorf("%s", msg)
 		}
 
@@ -126,10 +127,17 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 					c.ID))
 				continue
 			}
-			toolResp, _ := recordedDispatch(ctx, r.tools, c.Function.Name, args) // callback → RecordToolCall
+			toolResp, dispatchErr := recordedDispatch(ctx, r.tools, c.Function.Name, args) // callback → RecordToolCall
+			var content string
+			if dispatchErr != nil {
+				// 派发本身出错（当前所有 Handler 恒返回 nil；契约留了 error 位供未来真失败）：
+				// 错因文本须对模型可见，且不进 dedup 成功缓存、不计入 okSeq（同非 OK 状态语义）。
+				content = fmt.Sprintf("## 工具 %s 派发失败（本次未成功，不计入结果编号）\n%s\n\n请修正后重试。", c.Function.Name, dispatchErr.Error())
+				msgs = append(msgs, schema.ToolMessage(content, c.ID))
+				continue
+			}
 			resultJSON, _ := json.Marshal(toolResp)
 			seen[key] = string(resultJSON)
-			var content string
 			if toolResp.Status == contract.StatusOK {
 				okSeq++
 				content = fmt.Sprintf("## 工具 %s 返回（结果 id: q%d，归因块引用此 id）\n%s\n\n请据此给出最终回答或修正后重试。", c.Function.Name, okSeq, string(resultJSON))
@@ -140,8 +148,16 @@ func (r *Runner) Run(ctx context.Context, question string) (finalAnswer string, 
 		}
 	}
 
-	_ = traj.Finalize(ctx, "error", "", "exceeded max turns")
+	finalizeWarn(ctx, traj, "error", "", "exceeded max turns")
 	return "", fmt.Errorf("exceeded max turns (%d) without final answer", maxTurns)
+}
+
+// finalizeWarn 包 traj.Finalize：失败仅 stderr 提示，不影响主流程返回值
+//（trajectory 落库故障不应掩盖/改变 Run 本身的结果与错误）。
+func finalizeWarn(ctx context.Context, traj agent.TrajectoryStore, outcome, finalOutput, errSummary string) {
+	if err := traj.Finalize(ctx, outcome, finalOutput, errSummary); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: trajectory Finalize failed: %v\n", err)
+	}
 }
 
 // structuredOrFallbackCalls 取本轮工具调用：优先结构化 ToolCalls；为空时对 Content 跑探测器链

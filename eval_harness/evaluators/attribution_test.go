@@ -439,6 +439,22 @@ func TestResolveAnchor_NestedSafety(t *testing.T) {
 	}
 }
 
+// TestResolveAnchor_DeepNestingUnresolvableNotStackOverflow 锁 L-2：ResolveAnchor/
+// resolveOperand/navigate 互递归须有深度上限（护栏，不动值比对逻辑一个字）。构造深度 25 的
+// sum(sum(sum(...q1.table.rows[0][0]...))) 嵌套锚，超过上限须判 unresolvable（明确 error，
+// 走既有 unresolvable 语义），不得栈溢出/panic。
+func TestResolveAnchor_DeepNestingUnresolvableNotStackOverflow(t *testing.T) {
+	calls := churnTableCalls()
+	const depth = 25
+	anchor := "q1.table.rows[0][0]"
+	for i := 0; i < depth; i++ {
+		anchor = "sum(" + anchor + ")"
+	}
+	if _, err := ResolveAnchor(calls, anchor); err == nil {
+		t.Fatal("深度 25 嵌套应判 unresolvable（error），未报错")
+	}
+}
+
 func TestSplitArgs_BracketAware(t *testing.T) {
 	cases := []struct {
 		in   string

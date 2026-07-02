@@ -48,11 +48,11 @@ func TestMigrate_V1ToV2(t *testing.T) {
 	if v != "3" {
 		t.Errorf("schema_version = %q, want 3", v)
 	}
-	if !hasColumn(db, "trajectories", "task_class") {
-		t.Error("task_class column missing after migrate")
+	if ok, err := hasColumn(db, "trajectories", "task_class"); err != nil || !ok {
+		t.Errorf("task_class column missing after migrate (ok=%v err=%v)", ok, err)
 	}
-	if !hasColumn(db, "trajectory_steps", "role") {
-		t.Error("role column missing after migrate v1→v3")
+	if ok, err := hasColumn(db, "trajectory_steps", "role"); err != nil || !ok {
+		t.Errorf("role column missing after migrate v1→v3 (ok=%v err=%v)", ok, err)
 	}
 	var tc sql.NullString
 	db.QueryRow(`SELECT task_class FROM trajectories WHERE trajectory_id='old-1'`).Scan(&tc)
@@ -84,8 +84,8 @@ func TestMigrate_FreshDBIsV2(t *testing.T) {
 	if v != "3" {
 		t.Errorf("fresh db schema_version = %q, want 3", v)
 	}
-	if !hasColumn(db, "trajectories", "task_class") {
-		t.Error("fresh db missing task_class")
+	if ok, err := hasColumn(db, "trajectories", "task_class"); err != nil || !ok {
+		t.Errorf("fresh db missing task_class (ok=%v err=%v)", ok, err)
 	}
 }
 
@@ -109,8 +109,8 @@ func TestMigrateV2toV3_AddsRoleColumn(t *testing.T) {
 	if err := Migrate(db); err != nil {
 		t.Fatalf("初次 Migrate: %v", err)
 	}
-	if !hasColumn(db, "trajectory_steps", "role") {
-		t.Fatal("trajectory_steps 应有 role 列")
+	if ok, err := hasColumn(db, "trajectory_steps", "role"); err != nil || !ok {
+		t.Fatalf("trajectory_steps 应有 role 列 (ok=%v err=%v)", ok, err)
 	}
 	var v string
 	if err := db.QueryRow(`SELECT value FROM _meta WHERE key='schema_version'`).Scan(&v); err != nil {
@@ -122,6 +122,37 @@ func TestMigrateV2toV3_AddsRoleColumn(t *testing.T) {
 	// 幂等：再迁一次不报错
 	if err := Migrate(db); err != nil {
 		t.Fatalf("重复 Migrate: %v", err)
+	}
+}
+
+// TestHasColumn_QueryErrorSurfaced 锁 L-5：hasColumn 此前把查询失败静默归一成 false
+//（与"列真不存在"不可区分）。签名改 (bool, error) 后，db 层故障须显式返回 error，
+// 不能被调用方误当作"列不存在"处理。
+func TestHasColumn_QueryErrorSurfaced(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close() // 立即关闭：后续 PRAGMA 查询必然失败
+	if _, err := hasColumn(db, "trajectories", "task_class"); err == nil {
+		t.Fatal("db 已关闭时 hasColumn 应返回 error，而非静默归一 false")
+	}
+}
+
+// TestMigrateV1toV2_HasColumnErrorFailsFast 锁 L-5：migrateV1toV2 须显式处理 hasColumn
+// 的 error（fail-fast），不能吞掉 db 层故障后继续假定"列不存在"往下走。
+func TestMigrateV1toV2_HasColumnErrorFailsFast(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1-broken.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(v1DDL); err != nil {
+		t.Fatalf("seed v1: %v", err)
+	}
+	db.Close() // 关闭后 hasColumn 的 PRAGMA 查询必然报错
+	if err := migrateV1toV2(db); err == nil {
+		t.Fatal("db 已关闭时 migrateV1toV2 应 fail-fast 报错，而非吞错继续")
 	}
 }
 

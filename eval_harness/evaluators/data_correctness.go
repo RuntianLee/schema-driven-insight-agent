@@ -257,13 +257,42 @@ func checkRows(data []contract.BucketRow, r dcRow) []string {
 	return fails
 }
 
+// matchRow 遍历 match 的全部 key（对齐 tableRowMatches 的通用语义）：每个 key 须在
+// BucketRow 有对应字段且值相等，否则该行判不匹配——避免拼错/多余 key 被静默忽略成
+// "只按 bucket 比对就通过"的假阳性。空 match 视为不匹配任何行（沿用既有行为边界）。
 func matchRow(data []contract.BucketRow, match map[string]string) (contract.BucketRow, bool) {
+	if len(match) == 0 {
+		return contract.BucketRow{}, false
+	}
 	for _, row := range data {
-		if match["bucket"] != "" && row.Bucket == match["bucket"] {
+		if bucketRowMatches(row, match) {
 			return row, true
 		}
 	}
 	return contract.BucketRow{}, false
+}
+
+// bucketRowMatches 检查 match 的全部 key 是否都命中 row 的对应字段。
+func bucketRowMatches(row contract.BucketRow, match map[string]string) bool {
+	for k, v := range match {
+		got, ok := bucketRowStringField(row, k)
+		if !ok || got != v {
+			return false
+		}
+	}
+	return true
+}
+
+// bucketRowStringField 取 BucketRow 的字符串键字段（match 语法当前只支持 bucket/group）。
+func bucketRowStringField(row contract.BucketRow, name string) (string, bool) {
+	switch name {
+	case "bucket":
+		return row.Bucket, true
+	case "group":
+		return row.Group, true
+	default:
+		return "", false
+	}
 }
 
 func rowField(row contract.BucketRow, name string) (float64, bool) {

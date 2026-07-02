@@ -30,12 +30,26 @@ func NewStdinClarifier(scanner *bufio.Scanner, out io.Writer) *StdinClarifier {
 	return &StdinClarifier{scanner: scanner, out: out}
 }
 
-func (c *StdinClarifier) Ask(_ context.Context, question string) string {
+// Ask 把 Scan 放进 goroutine 以能响应 ctx 取消：select 同时等结果与 ctx.Done()。
+// ctx 取消时返回 degradeMessage（与 EOF/非 TTY 同一降级口径）+ 不阻塞——澄清失败不应崩 Run。
+// 已知权衡：ctx 取消后 goroutine 里残留的 Scan 仍会继续阻塞等 stdin（无法中途打断系统调用），
+// 直到真有一行输入或 stdin 关闭才退出；不影响本次 Ask 已返回的调用方。
+func (c *StdinClarifier) Ask(ctx context.Context, question string) string {
 	fmt.Fprintf(c.out, "\n[需要澄清] %s\n> ", question)
-	if !c.scanner.Scan() {
+	result := make(chan string, 1)
+	go func() {
+		if !c.scanner.Scan() {
+			result <- degradeMessage
+			return
+		}
+		result <- c.scanner.Text()
+	}()
+	select {
+	case ans := <-result:
+		return ans
+	case <-ctx.Done():
 		return degradeMessage
 	}
-	return c.scanner.Text()
 }
 
 // NonInteractiveClarifier 恒返回 degradeMessage：eval harness 等无真人道注入，

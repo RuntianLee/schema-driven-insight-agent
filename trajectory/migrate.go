@@ -70,7 +70,11 @@ func migrateV1toV2(db *sql.DB) error {
 	}
 	defer tx.Rollback()
 
-	if !hasColumn(db, "trajectories", "task_class") {
+	has, err := hasColumn(db, "trajectories", "task_class")
+	if err != nil {
+		return fmt.Errorf("check task_class column: %w", err)
+	}
+	if !has {
 		if _, err := tx.Exec(`ALTER TABLE trajectories ADD COLUMN task_class TEXT`); err != nil {
 			return fmt.Errorf("add task_class: %w", err)
 		}
@@ -129,12 +133,13 @@ func txHasColumn(tx *sql.Tx, table, col string) (bool, error) {
 	return false, rows.Err()
 }
 
-// hasColumn 用 PRAGMA table_info 判断列是否存在。
+// hasColumn 用 PRAGMA table_info 判断列是否存在。与 txHasColumn 同义（同签名 (bool, error)），
+// 返回 error 以便调用方在 PRAGMA 查询失败时 fail-fast，不与"列真不存在"混淆。
 // table 由调用方以硬编码字面量传入（PRAGMA 不支持 ? 占位符，故拼接；无用户输入风险）。
-func hasColumn(db *sql.DB, table, col string) bool {
+func hasColumn(db *sql.DB, table, col string) (bool, error) {
 	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -142,11 +147,11 @@ func hasColumn(db *sql.DB, table, col string) bool {
 		var name, ctype string
 		var dflt sql.NullString
 		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return false
+			return false, err
 		}
 		if name == col {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, rows.Err()
 }

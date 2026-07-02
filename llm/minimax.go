@@ -17,6 +17,11 @@ const (
 	costPerKTokenOut = 0.0011
 )
 
+// maxLLMResponseBytes 是读取 provider HTTP 响应体的硬上限（32MB）：防一个失控/恶意
+// 网关无限流式回灌把整个进程内存吃满；单条 LLM 回复正常远小于此值，误伤概率可忽略。
+// minimax.go 与 anthropic.go 共用（同 package llm）。
+const maxLLMResponseBytes = 32 << 20
+
 type minimaxClient struct {
 	apiKey          string
 	model           string
@@ -127,7 +132,7 @@ func (c *minimaxClient) callOpenAI(ctx context.Context, prompt string) (string, 
 		return "", 0, 0, 0, err
 	}
 	defer res.Body.Close()
-	raw, _ := io.ReadAll(res.Body)
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, maxLLMResponseBytes))
 	if res.StatusCode != http.StatusOK {
 		return "", 0, 0, 0, fmt.Errorf("minimax http %d: %s", res.StatusCode, string(raw))
 	}
