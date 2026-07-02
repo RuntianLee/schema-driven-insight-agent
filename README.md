@@ -14,7 +14,7 @@ Most "chat with your data" tools either (a) let an LLM write raw SQL against pro
 
 - **Schema-driven, zero business hardcode** — the engine knows *nothing* about your domain. A YAML `schema.yaml` declares tables, columns, roles, PII flags, and distribution buckets. The same binary serves any adapter.
 - **Three-layer data flow** — the agent only ever reads a local, de-identified SQLite snapshot. It **never** connects to production Postgres.
-- **Structured tool, not free-form SQL** — the agent calls a parameterized `query_distribution` tool with a column/bucket whitelist; SQL is built by the framework, not the LLM.
+- **Structured tools, not free-form SQL** — the agent calls parameterized tools (`query_distribution` for column/bucket distributions, `analyze` for schema-driven aggregation/filter/group-by queries) with a column whitelist; SQL is built by the framework, not the LLM. A third tool, `request_clarification`, lets the agent ask the user a follow-up question instead of guessing when a question is genuinely ambiguous.
 - **Proactive insight** — beyond the distribution table, the agent surfaces operational takeaways (churn cliffs, whale concentration, server skew).
 - **Two-agent, traceable recommendations** — an optional Advisor agent consumes *only* the Analyst's structured output (never the raw data) plus an adapter-supplied operational playbook, and drafts recommendations each traceable to a specific analyst result; a deterministic grounding check drops any hallucinated reference.
 - **Trajectory + Eval from day one** — every run is recorded; an eval harness gates `data_correctness`, `advisor_grounding`, **and `attribution_grounding`** deterministically (the last verifies every quantitative claim the Analyst makes is traceable to a real tool cell), with off-gate LLM-judge signals (`reasoning_quality`, `insight_novelty`, `claim_coverage`) for narrative quality.
@@ -51,7 +51,7 @@ The core discipline: **the agent never touches production. Data only flows up.**
 ```mermaid
 flowchart TB
     subgraph L3["Layer 3 · Agent runtime"]
-        AG["eino_agent.Runner<br/>+ query_distribution tool<br/>+ LLM (MiniMax / mock)"]
+        AG["eino_agent.Runner<br/>+ query_distribution / analyze / request_clarification tools<br/>+ LLM (MiniMax / mock)"]
     end
     subgraph CORE["framework core (this repo · zero business hardcode)"]
         SP["schema_protocol<br/>parses schema.yaml → Digest + SQL builder<br/>(rejects role/pii TODO placeholders)"]
@@ -116,7 +116,7 @@ What the framework guarantees, and where the trust boundary sits:
 
 ```
 schema_protocol/   schema.yaml parser (etl_policy / index / TODO safety gate) + Digest + whitelisted SQL builder
-tools/             query_distribution tool (the agent's only data tool)
+tools/             agent's data tools: query_distribution (distributions), analyze (aggregation/filter/group-by), request_clarification (ask-before-guess)
 eino_agent/        agent runner (LLM tool-calling loop)
 advisor/           Advisor agent: drafts traceable recommendations from the Analyst's structured output only (never raw data)
 trajcapture/       shared in-memory trajectory capture (Capture + Tee) for the Analyst→Advisor handoff (zero Runner change)

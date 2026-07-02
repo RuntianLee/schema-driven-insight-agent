@@ -14,7 +14,7 @@
 
 - **Schema 驱动、零业务硬编码** —— 引擎对你的业务**一无所知**。一份 `schema.yaml` 声明表、列、role（语义角色）、PII 标记、分布桶。同一个二进制服务任意 adapter。
 - **三层数据流** —— Agent 只读取本地、已脱敏的 SQLite 快照，**绝不**连接生产 Postgres。
-- **结构化工具，而非自由 SQL** —— Agent 调用参数化的 `query_distribution` 工具（列/桶白名单），SQL 由框架构造，LLM 不写 SQL。
+- **结构化工具，而非自由 SQL** —— Agent 调用参数化工具（`query_distribution` 查列/桶分布，`analyze` 做 schema 驱动的聚合/过滤/分组查询），列走白名单，SQL 由框架构造，LLM 不写 SQL。第三个工具 `request_clarification` 让 Agent 在问题实质模糊时向用户反问，而非猜着查。
 - **主动洞察** —— 不止给分布表格，还主动指出运营要点（流失断崖、巨鲸集中度、分服倾斜）。
 - **双 agent、可溯源建议** —— 可选的 Advisor agent**只**消费 Analyst 的结构化输出（永不碰原始数据）+ adapter 提供的运营 playbook，产出建议草案，每条都可溯源到具体的 analyst 结果；确定性 grounding 校验丢弃任何幻觉引用。
 - **Trajectory + Eval 从第一天就在** —— 每次运行都被记录；Eval 评测道以 `data_correctness`、`advisor_grounding` **与 `attribution_grounding`** 确定性把关（后者校验 Analyst 给出的每个定量主张都能溯源到真实工具单元格），并有 off-gate LLM 评判软信号（`reasoning_quality`、`insight_novelty`、`claim_coverage`）评估叙述质量。
@@ -51,7 +51,7 @@ go run ./cmd/eval -schema examples/bankchurn/schema.yaml \
 ```mermaid
 flowchart TB
     subgraph L3["第 3 层 · Agent 运行时"]
-        AG["eino_agent.Runner<br/>+ query_distribution 工具<br/>+ LLM（MiniMax / mock）"]
+        AG["eino_agent.Runner<br/>+ query_distribution / analyze / request_clarification 工具<br/>+ LLM（MiniMax / mock）"]
     end
     subgraph CORE["framework 核心（本仓库 · 零业务硬编码）"]
         SP["schema_protocol<br/>解析 schema.yaml → Digest + SQL 构造器<br/>（拒绝 role/pii TODO 占位）"]
@@ -105,7 +105,7 @@ flowchart TB
 
 ```
 schema_protocol/   schema.yaml 解析器（etl_policy / index / TODO 安全闸）+ Digest + 白名单 SQL 构造器
-tools/             query_distribution 工具（Agent 唯一的数据工具）
+tools/             Agent 的数据工具：query_distribution（分布查询）、analyze（聚合/过滤/分组）、request_clarification（先反问再查）
 eino_agent/        Agent runner（LLM tool-calling 循环）
 advisor/           Advisor agent：仅从 Analyst 结构化输出（永不碰原始数据）产出可溯源建议草案
 trajcapture/       共享内存轨迹捕获（Capture + Tee），承接 Analyst→Advisor 接力（Runner 零改）
