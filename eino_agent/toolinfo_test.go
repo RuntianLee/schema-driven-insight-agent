@@ -1,6 +1,9 @@
 package eino_agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestToolInfos(t *testing.T) {
 	infos := ToolInfos()
@@ -30,5 +33,20 @@ func TestToolInfos_IncludesRequestClarification(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("ToolInfos 应包含 request_clarification 声明")
+	}
+}
+
+func TestClarifyToolDescCaliberUniqueness(t *testing.T) {
+	// C1b：工具声明 Desc 与 prompt 的「口径唯一性自检」措辞对齐。
+	var desc string
+	for _, ti := range ToolInfos() {
+		if ti.Name == "request_clarification" {
+			desc = ti.Desc
+		}
+	}
+	for _, want := range []string{"口径无法唯一确定", "取值集"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("clarify Desc 缺 %q（C1b 措辞对齐）", want)
+		}
 	}
 }
