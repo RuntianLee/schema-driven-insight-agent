@@ -265,7 +265,9 @@ func FinishAB(ab *evalpkg.ABReport, opts Options) int {
 		} else {
 			stamp := time.Now().Format("2006-01-02-150405")
 			if js, err := ab.JSON(); err == nil {
-				_ = os.WriteFile(filepath.Join(opts.OutDir, stamp+"-ab-report.json"), js, 0o644)
+				if err := os.WriteFile(filepath.Join(opts.OutDir, stamp+"-ab-report.json"), js, 0o644); err != nil {
+					fmt.Fprintln(os.Stderr, "warn: 写 ab-report 失败:", err)
+				}
 			}
 		}
 	}

@@ -14,9 +14,11 @@ import (
 type fakeModel struct {
 	responses []*schema.Message
 	calls     int
+	lastMsgs  []*schema.Message // 最近一次 Generate 收到的完整消息列表（供断言 tool_result 内容）
 }
 
-func (f *fakeModel) Generate(_ context.Context, _ []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+func (f *fakeModel) Generate(_ context.Context, msgs []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+	f.lastMsgs = msgs
 	r := f.responses[f.calls]
 	f.calls++
 	return r, nil

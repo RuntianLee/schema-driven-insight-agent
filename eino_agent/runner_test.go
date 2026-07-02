@@ -2,6 +2,7 @@ package eino_agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -25,6 +26,15 @@ func (d *stubDispatcher) Dispatch(_ context.Context, name string, args map[strin
 		return r, nil
 	}
 	return contract.Response{Status: contract.StatusSchemaError, Hint: "unknown"}, nil
+}
+
+// errDispatcher 恒对指定 tool 名返回 error（模拟 Handler 未来真返回 err 的契约路径）。
+type errDispatcher struct {
+	err error
+}
+
+func (d *errDispatcher) Dispatch(_ context.Context, _ string, _ map[string]any) (contract.Response, error) {
+	return contract.Response{}, d.err
 }
 
 func newTestRunner(m *fakeModel, disp agent.ToolDispatcher, rec *fakeRecorder) *Runner {
@@ -408,6 +418,37 @@ func TestRun_DedupEmitsCachedToolResult(t *testing.T) {
 	// dispatch 只发生一次（第二次被 dedup 拦截，不重跑不录）。
 	if len(rec.toolCalls) != 1 {
 		t.Fatalf("expect 1 real dispatch, got %d (%v)", len(rec.toolCalls), rec.toolCalls)
+	}
+}
+
+// TestRun_DispatchErrorSurfacesToModel 锁 M-1：Dispatch 返回 error 时（当前所有 Handler
+// 恒 nil，但契约允许未来真返回 err）——错因文本须对模型可见（tool_result 含错因子串），
+// 且该轮不得计入 okSeq（失败分支语义，与既有非 OK 状态一致）。
+func TestRun_DispatchErrorSurfacesToModel(t *testing.T) {
+	m := &fakeModel{responses: []*schema.Message{
+		asMsg(10, 5, tc("c1", "analyze", `{"table":"t"}`)),
+		finalMsg("done"),
+	}}
+	disp := &errDispatcher{err: errors.New("boom: upstream unavailable")}
+	rec := &fakeRecorder{}
+	_, err := newTestRunner(m, disp, rec).Run(context.Background(), "q")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// 找到派发失败那轮喂给模型的 tool_result 内容（第 2 次 Generate 收到的消息列表里的 ToolMessage）。
+	var toolResultContent string
+	for _, msg := range m.lastMsgs {
+		if msg.Role == schema.Tool {
+			toolResultContent = msg.Content
+		}
+	}
+	if !strings.Contains(toolResultContent, "boom: upstream unavailable") {
+		t.Fatalf("tool_result 未包含错因子串，got=%q", toolResultContent)
+	}
+	// 失败分支不应留下 q1 结果编号引用（未递增 okSeq）。
+	if strings.Contains(toolResultContent, "结果 id") {
+		t.Fatalf("dispatch error 分支不应递增/暴露 okSeq 结果编号: %q", toolResultContent)
 	}
 }
 

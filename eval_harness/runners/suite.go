@@ -88,6 +88,11 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		runner := eino_agent.New(agentModel, cfg.AgentModelName, cfg.Dispatcher, opener, cfg.SchemaCtx, eino_agent.NonInteractiveClarifier{})
 		runQuestion := applyReflection(ctx, cfg.ReflectionProvider, task.ID, task.Question)
 		rawAnswer, runErr := runner.Run(ctx, runQuestion)
+		if runErr != nil {
+			// 运行时故障（超预算/panic 恢复后的错误路径等）须可见——否则报告只显示内容质量
+			// FAIL，运行时故障被掩盖成"agent 答得不好"。不改变 gate 判定语义，只加可见性。
+			fmt.Fprintf(os.Stderr, "warn: task %s agent run failed: %v\n", task.ID, runErr)
+		}
 		claims, answer := parseAttributionOutput(rawAnswer)
 
 		res := evaluators.TaskResult{
@@ -149,7 +154,10 @@ func RunSuite(ctx context.Context, cfg Config) (*evalpkg.Report, error) {
 		// reflection 回写：把本任务全部裁决交给 provider（它据此区分「查询对/错」与「解读弱」）。
 		// 仅在确有 data_correctness 裁决时回写；失败仅吞，绝不干扰评测主流程。
 		if obs, ok := cfg.ReflectionProvider.(ReflectionObserver); ok && dcSeen {
-			_ = obs.Observe(ctx, res, scores)
+			if oerr := obs.Observe(ctx, res, scores); oerr != nil {
+				// 吞错误不吞信号：reflection 回写失败不应中断评测主流程，但须留可观测痕迹。
+				fmt.Fprintf(os.Stderr, "warn: task %s reflection observe failed: %v\n", task.ID, oerr)
+			}
 		}
 	}
 	return rep, nil

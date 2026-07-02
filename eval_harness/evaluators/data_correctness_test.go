@@ -66,6 +66,29 @@ rows:
 	}
 }
 
+// TestMatchRow_UnknownKeyDoesNotSilentlyMatchWrongRow 锁 M-6：matchRow 此前硬编码只认
+// bucket key、忽略其余 key——若 spec 誤拼了额外 key（如把 group 误加进本应只按 bucket
+// 收窄的 match），旧实现只按 bucket 比对就直接命中第一行，把拼错的 key 静默忽略成"假通过"。
+// 修复须遍历 match 全部 key（对齐 tableRowMatches 通用语义）："group" 非 BucketRow 已知
+// 字段 → 判定该行不匹配 → 落"未找到匹配行"（fail），而非误把 bucket 相同的第一行当命中。
+func TestMatchRow_UnknownKeyDoesNotSilentlyMatchWrongRow(t *testing.T) {
+	resp := contract.Response{Status: contract.StatusOK,
+		Data: []contract.BucketRow{
+			{Bucket: "20", PlayerCount: 100}, // 旧实现只看 bucket，会误命中这行、误判 pass
+		}}
+	spec := specNode(t, `
+tool: query_distribution
+expect_status: OK
+rows:
+  - match: {bucket: "20", group: "x"}
+    expect: {player_count: 100}
+`)
+	s, _ := NewDataCorrectness().Evaluate(context.Background(), resultWith(resp), spec)
+	if s.Pass {
+		t.Fatalf("match 含 BucketRow 未知 key（group）不应被静默忽略而误命中，got %+v", s)
+	}
+}
+
 func TestDataCorrectness_GroupsPass(t *testing.T) {
 	resp := contract.Response{
 		Status: contract.StatusOK,

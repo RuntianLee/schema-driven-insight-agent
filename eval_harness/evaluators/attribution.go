@@ -374,10 +374,25 @@ var derivRe = regexp.MustCompile(`^([a-zA-Z_]+)\((.*)\)$`)
 // rowsStarPathRe 检测「裸路径」是否含 rows[*] 通配（用于操作数派发，非算子表达式）。
 var rowsStarPathRe = regexp.MustCompile(`rows?\[\*\]`)
 
+// maxAnchorDepth 是 ResolveAnchor/resolveOperand 互递归的最大嵌套深度护栏。
+// 只防栈溢出/失控嵌套，不动值比对逻辑；超限判 unresolvable（走既有 unresolvable 语义，
+// 不新增状态）。25 层深的合法归因锚极罕见，20 留够正常业务嵌套（如 ratio(sum(...),diff(...))）
+// 的余量。
+const maxAnchorDepth = 20
+
+var errAnchorTooDeep = fmt.Errorf("锚嵌套深度超过上限（%d 层）", maxAnchorDepth)
+
 // ResolveAnchor 派发：派生式 name(...) → 解析操作数 + 应用算子；否则当单元格路径走 Resolve。
-// 操作数经 resolveOperand 求值，支持任意深度嵌套（操作数本身可为 name(...)）与
+// 操作数经 resolveOperand 求值，支持嵌套（操作数本身可为 name(...)，深度受 maxAnchorDepth 护栏）与
 // rows[*] 列向量（仅可喂变长算子）。
 func ResolveAnchor(calls []contract.ToolCall, anchor string) (float64, error) {
+	return resolveAnchorDepth(calls, anchor, 0)
+}
+
+func resolveAnchorDepth(calls []contract.ToolCall, anchor string, depth int) (float64, error) {
+	if depth > maxAnchorDepth {
+		return 0, errAnchorTooDeep
+	}
 	m := derivRe.FindStringSubmatch(strings.TrimSpace(anchor))
 	if m == nil {
 		return Resolve(calls, anchor)
@@ -392,7 +407,7 @@ func ResolveAnchor(calls []contract.ToolCall, anchor string) (float64, error) {
 	}
 	var vals []float64
 	for _, a := range args {
-		ov, err := resolveOperand(calls, a)
+		ov, err := resolveOperandDepth(calls, a, depth+1)
 		if err != nil {
 			return 0, fmt.Errorf("操作数 %q 不可解析: %w", a, err)
 		}
@@ -410,15 +425,22 @@ func ResolveAnchor(calls []contract.ToolCall, anchor string) (float64, error) {
 }
 
 // resolveOperand 把一个操作数表达式求成标量向量（标量 → 单元素）：
-//  1) name(...) 形态 → 递归 ResolveAnchor（标量结果，支持任意深度嵌套）。
+//  1) name(...) 形态 → 递归 ResolveAnchor（标量结果，支持嵌套，深度受 maxAnchorDepth 护栏）。
 //  2) 裸路径含 rows[*] → resolveColumn（列向量，仅变长算子可消费）。
 //  3) 否则 → Resolve（单元格标量）。
 //
 // 顺序保证 sum(rows[*].x) 这类「含 rows[*] 的算子」走 (1) 而非 (2)。
 func resolveOperand(calls []contract.ToolCall, expr string) ([]float64, error) {
+	return resolveOperandDepth(calls, expr, 1)
+}
+
+func resolveOperandDepth(calls []contract.ToolCall, expr string, depth int) ([]float64, error) {
+	if depth > maxAnchorDepth {
+		return nil, errAnchorTooDeep
+	}
 	expr = strings.TrimSpace(expr)
 	if derivRe.MatchString(expr) {
-		v, err := ResolveAnchor(calls, expr)
+		v, err := resolveAnchorDepth(calls, expr, depth)
 		if err != nil {
 			return nil, err
 		}
