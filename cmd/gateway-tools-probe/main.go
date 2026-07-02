@@ -1,4 +1,4 @@
-// Command gateway-tools-probe 一次性调研探针：测试 okaoi/anthropic 兼容网关
+// Command gateway-tools-probe 一次性调研探针：测试 anthropic 兼容网关
 // 是否支持原生 tools 透传（请求带 tools 字段，响应能否回结构化 tool_use 块）。
 //
 // 串行发 2 个请求（A 带 tools / B 不带），打印原始响应用于人工核验。
@@ -49,13 +49,18 @@ type requestBody struct {
 func main() {
 	// ── 读配置（与生产代码相同的来源）────────────────────────────────────────
 	// endpoint/model 默认值取自环境变量（PROBE_ENDPOINT / PROBE_MODEL），api_key 必须由
-	// PROBE_API_KEY 提供——无任何 secret 入库；默认 endpoint 同 config/llm.yaml 的 okaoi 网关。
-	endpoint := getEnv("PROBE_ENDPOINT", "https://www.okaoi.com/v1/messages")
+	// PROBE_API_KEY 提供——无任何 secret 入库；endpoint 同 config/llm.yaml 的网关配置。
+	endpoint := getEnv("PROBE_ENDPOINT", "")
 	apiKey := getEnv("PROBE_API_KEY", "")
 	model := getEnv("PROBE_MODEL", "MiniMax-M2.7")
 
+	if endpoint == "" {
+		fmt.Fprintln(os.Stderr, "错误：请设置 PROBE_ENDPOINT 环境变量（anthropic 兼容网关地址）")
+		os.Exit(1)
+	}
+
 	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "错误：请设置 PROBE_API_KEY 环境变量（okaoi api key）")
+		fmt.Fprintln(os.Stderr, "错误：请设置 PROBE_API_KEY 环境变量（网关 api key）")
 		os.Exit(1)
 	}
 

@@ -17,7 +17,7 @@ func TestNewChatModel_RequiresAnthropicWire(t *testing.T) {
 func TestNewChatModel_BuildsBoundModel(t *testing.T) {
 	cm, err := NewChatModel(context.Background(), llm.MiniMaxConfig{
 		Format: "anthropic", APIKey: "dummy", Model: "MiniMax-M2.7",
-		Endpoint: "https://www.okaoi.com", MaxTokens: 4096,
+		Endpoint: "https://gateway.example.com", MaxTokens: 4096,
 	})
 	if err != nil {
 		t.Fatalf("NewChatModel: %v", err)
@@ -33,11 +33,11 @@ func TestNewChatModel_BuildsBoundModel(t *testing.T) {
 
 func TestBaseURLFromEndpoint(t *testing.T) {
 	cases := map[string]string{
-		"https://www.okaoi.com/v1/messages":          "https://www.okaoi.com",
-		"https://www.okaoi.com/v1/messages/":         "https://www.okaoi.com",
-		"https://www.okaoi.com":                      "https://www.okaoi.com",
-		"https://www.okaoi.com/":                     "https://www.okaoi.com",
-		"https://api.example.com/base/v1/messages":   "https://api.example.com/base",
+		"https://gateway.example.com/v1/messages":  "https://gateway.example.com",
+		"https://gateway.example.com/v1/messages/": "https://gateway.example.com",
+		"https://gateway.example.com":              "https://gateway.example.com",
+		"https://gateway.example.com/":             "https://gateway.example.com",
+		"https://api.example.com/base/v1/messages": "https://api.example.com/base",
 	}
 	for in, want := range cases {
 		if got := baseURLFromEndpoint(in); got != want {
